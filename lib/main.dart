@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui';
@@ -8,16 +9,51 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_libserialport/flutter_libserialport.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:quick_usb/quick_usb.dart' as quick_usb;
+import 'usb_packet_tab.dart';
 
-void main() {
-  runApp(SerialPortApp());
+void main() async { // <--- 将 main 函数标记为 async
+  // 在运行应用之前，确保插件系统已初始化
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  // 核心修复：在这里初始化 quick_usb 插件，并等待其完成
+  await _initQuickUsb();
+  
+  runApp(CommunicationToolApp());
 }
 
-class SerialPortApp extends StatelessWidget {
+Future<void> _initQuickUsb() async {
+  try {
+    print('正在初始化 QuickUsb...');
+    // 调用插件提供的初始化方法
+    bool success = await quick_usb.QuickUsb.init(); 
+    if (!success) {
+      // 如果 init 返回 false，手动抛出一个错误，让上面 catch 住
+      throw Exception('底层库初始化返回 false，插件实例未正确创建');
+    }
+    print('QuickUsb 初始化成功');
+  } catch (e) {
+    print('USB库初始化发生异常: $e');
+    
+    // 提供更详细的诊断信息，特别是对于 Linux
+    if (e.toString().contains('LateInitializationError')) {
+      print('错误诊断: QuickUsbPlatform.instance 未初始化，这通常意味着插件初始化失败。');
+      print('可能原因: 插件内部注册失败或平台特定实现加载失败');
+      print('请确保您的应用程序在启动时正确调用 quick_usb.QuickUsb.init()。');
+    } else if (Platform.isLinux && e.toString().contains('libusb')) {
+      print('错误提示: 在 Linux 环境下，可能缺少 libusb 库文件。');
+      print('解决方案: 请尝试运行命令: sudo apt update && sudo apt install libusb-1.0-0-dev');
+    } else {
+      print('其他错误: 请检查 QuickUsb 插件的配置和系统环境。');
+    }
+  }
+}
+
+class CommunicationToolApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: '串口通信工具',
+      title: '通信工具',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF1E1E1E),
@@ -29,7 +65,62 @@ class SerialPortApp extends StatelessWidget {
           background: const Color(0xFF1E1E1E),
         ),
       ),
-      home: SerialPortHomePage(),
+      home: HomePage(),
+    );
+  }
+}
+
+class HomePage extends StatefulWidget {
+  @override
+  _HomePageState createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin {
+  late TabController _tabController;
+  
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+  }
+  
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+  
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('通信工具', style: TextStyle(color: Color(0xFF569CD6))),
+        backgroundColor: Color(0xFF1E1E1E),
+        elevation: 0,
+        bottom: TabBar(
+          controller: _tabController,
+          tabs: [
+            Tab(
+              icon: Icon(Icons.settings_input_component, size: 20),
+              text: '串口通信',
+            ),
+            Tab(
+              icon: Icon(Icons.usb, size: 20),
+              text: 'USB报文解析',
+            ),
+          ],
+          labelColor: Color(0xFF569CD6),
+          unselectedLabelColor: Color(0xFF858585),
+          indicatorColor: Color(0xFF569CD6),
+        ),
+      ),
+      body: TabBarView(
+        controller: _tabController,
+        children: [
+          SerialPortHomePage(),
+          UsbPacketTab(),
+        ],
+      ),
     );
   }
 }
@@ -49,6 +140,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   static const Color vsCodeOrange = Color(0xFFCE9178);
   static const Color receiveColor = Color(0xFF4EC9B0);
   static const Color sendColor = Color(0xFFCE9178);
+  static const Color hexBackgroundColor = Color(0xFF334D4A); // HEX数据背景色
 
   // 串口相关变量
   SerialPort? _serialPort;
@@ -72,6 +164,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
 
   // 数据接收相关变量
   final List<DataLine> _receivedLines = [];
+  final List<EnhancedDataLine> _receivedEnhancedLines = [];
   final ScrollController _receiveScrollController = ScrollController();
   final int _maxDisplayLines = 1000;
 
@@ -109,10 +202,13 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
 
   @override
   void dispose() {
-    _disconnect();
-    _receiveScrollController.dispose();
+    _subscription?.cancel();
+    _reader?.close();
+    _serialPort?.close();
+    _serialPort?.dispose();
     _dataTimeoutTimer?.cancel();
     _dataBuffer.clear();
+    _receiveScrollController.dispose();
     super.dispose();
   }
 
@@ -297,6 +393,124 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
     return printableRatio > 0.7; // 如果可打印字符超过70%，认为是有效文本
   }
 
+  // 判断字符是否为HEX字符
+  bool _isHexCharacter(String char) {
+    if (char.length != 1) return false;
+    return RegExp(r'[0-9A-Fa-f]').hasMatch(char);
+  }
+
+  // 判断字符是否为正常字符（ASCII可打印字符+常见控制字符）
+  bool _isNormalCharacter(int codePoint) {
+    // ASCII可打印字符（包括空格、标点、数字、字母）
+    if (codePoint >= 32 && codePoint <= 126) return true;
+    
+    // 常见控制字符：换行、回车、制表符
+    if (codePoint == 10 || codePoint == 13 || codePoint == 9) return true;
+    
+    // 扩展ASCII中的常见符号（如°、±等）
+    // 这里可以扩展更多常见符号
+    
+    return false; // 其他字符视为不正常
+  }
+
+  // 格式化HEX字符串：添加字符间空格
+  String _formatHexWithSpaces(String hexString) {
+    if (hexString.isEmpty) return hexString;
+    
+    StringBuffer formatted = StringBuffer();
+    for (int i = 0; i < hexString.length; i += 2) {
+      if (i > 0) formatted.write(' ');
+      int end = i + 2;
+      if (end > hexString.length) end = hexString.length;
+      formatted.write(hexString.substring(i, end));
+    }
+    return formatted.toString();
+  }
+
+  // 智能分割文本和HEX数据（简化版）
+  List<DataSegment> _splitTextAndHex(String text) {
+    List<DataSegment> segments = [];
+    
+    // 使用正则表达式查找长HEX序列（≥12个连续HEX字符）
+    RegExp hexPattern = RegExp(r'([0-9A-Fa-f]{12,})');
+    int lastIndex = 0;
+    
+    for (RegExpMatch match in hexPattern.allMatches(text)) {
+      // 添加匹配前的文本
+      if (match.start > lastIndex) {
+        String textSegment = text.substring(lastIndex, match.start);
+        if (textSegment.trim().isNotEmpty) {
+          segments.add(DataSegment(
+            content: textSegment,
+            type: SegmentType.text,
+          ));
+        }
+      }
+      
+      // 添加HEX序列（带空格格式化）
+      String hexContent = match.group(0)!;
+      segments.add(DataSegment(
+        content: _formatHexWithSpaces(hexContent),
+        type: SegmentType.hex,
+      ));
+      
+      lastIndex = match.end;
+    }
+    
+    // 添加剩余文本
+    if (lastIndex < text.length) {
+      String remainingText = text.substring(lastIndex);
+      if (remainingText.trim().isNotEmpty) {
+        segments.add(DataSegment(
+          content: remainingText,
+          type: SegmentType.text,
+        ));
+      }
+    }
+    
+    return segments;
+  }
+
+  // 处理不正常字符：转换为HEX表示，但不合并
+  String _processUnusualCharacters(String text) {
+    StringBuffer result = StringBuffer();
+    
+    for (int i = 0; i < text.length; i++) {
+      int codePoint = text.codeUnitAt(i);
+      
+      if (_isNormalCharacter(codePoint)) {
+        // 正常字符，直接添加
+        result.write(text[i]);
+      } else {
+        // 不正常字符，转换为HEX表示，用方括号包围
+        String hex = codePoint.toRadixString(16).padLeft(2, '0').toUpperCase();
+        result.write('[$hex]');
+      }
+    }
+    
+    return result.toString();
+  }
+
+  // 添加增强的数据行
+  void _addEnhancedLine(List<DataSegment> segments, LineType lineType) {
+    setState(() {
+      _receivedEnhancedLines.add(EnhancedDataLine(
+        segments: segments,
+        lineType: lineType,
+        timestamp: showTimestamp ? DateTime.now() : null,
+      ));
+      
+      if (_receivedEnhancedLines.length > _maxDisplayLines) {
+        _receivedEnhancedLines.removeRange(
+          0, 
+          _receivedEnhancedLines.length - _maxDisplayLines
+        );
+      }
+    });
+    
+    _scrollToBottom();
+  }
+
   List<Map<String, double>> _parseBracketedData(String line) {
     List<Map<String, double>> dataList = [];
     try {
@@ -399,7 +613,13 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
 
   void _displayReceivedData(String dataString) {
     if (dataString.isEmpty) return;
-    _addLine(dataString, LineType.receive);
+    
+    // 先处理不正常字符
+    String processedString = _processUnusualCharacters(dataString);
+    
+    // 使用智能分割算法处理混合数据
+    List<DataSegment> segments = _splitTextAndHex(processedString);
+    _addEnhancedLine(segments, LineType.receive);
   }
 
   void _sendData() {
@@ -629,9 +849,13 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
               thumbVisibility: true,
               child: ListView.builder(
                 controller: _receiveScrollController,
-                itemCount: _receivedLines.length,
+                itemCount: _receivedEnhancedLines.isNotEmpty ? _receivedEnhancedLines.length : _receivedLines.length,
                 itemBuilder: (context, index) {
-                  return _buildDataLine(_receivedLines[index], index);
+                  if (_receivedEnhancedLines.isNotEmpty) {
+                    return _buildEnhancedDataLine(_receivedEnhancedLines[index], index);
+                  } else {
+                    return _buildDataLine(_receivedLines[index], index);
+                  }
                 },
               ),
             ),
@@ -662,6 +886,74 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
       child: SelectableText(
         dataLine.toString(),
         style: TextStyle(color: lineColor, fontSize: 14),
+      ),
+    );
+  }
+
+  Widget _buildEnhancedDataLine(EnhancedDataLine dataLine, int index) {
+    Color textColor = vsCodeText;
+    
+    switch (dataLine.lineType) {
+      case LineType.send:
+        textColor = sendColor;
+        break;
+      case LineType.receive:
+        textColor = receiveColor;
+        break;
+      case LineType.system:
+        textColor = vsCodeTextSecondary;
+        break;
+    }
+    
+    // 构建时间戳前缀
+    String timePrefix = '';
+    if (dataLine.timestamp != null && showTimestamp) {
+      String timeStr = dataLine.timestamp!.toString().substring(11, 19);
+      switch (dataLine.lineType) {
+        case LineType.send:
+          timePrefix = '$timeStr 发送: ';
+          break;
+        case LineType.receive:
+          timePrefix = '$timeStr 接收: ';
+          break;
+        case LineType.system:
+          timePrefix = '$timeStr ';
+          break;
+      }
+    }
+    
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: SelectableText.rich(
+        TextSpan(
+          children: [
+            // 时间戳前缀
+            TextSpan(
+              text: timePrefix,
+              style: TextStyle(color: textColor, fontSize: 14),
+            ),
+            // 数据片段
+            ...dataLine.segments.map((segment) {
+              if (segment.type == SegmentType.text) {
+                return TextSpan(
+                  text: segment.content,
+                  style: TextStyle(color: textColor, fontSize: 14),
+                );
+              } else {
+                // HEX数据：添加空格分隔并使用背景色
+                return TextSpan(
+                  text: ' ${segment.content} ',
+                  style: TextStyle(
+                    color: textColor,
+                    fontSize: 14,
+                    backgroundColor: hexBackgroundColor,
+                  ),
+                );
+              }
+            }).toList(),
+          ],
+        ),
       ),
     );
   }
@@ -736,75 +1028,62 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   }
 
   Widget _buildChartArea() {
-    return Container(
-      decoration: BoxDecoration(
-        border: Border.all(color: vsCodeBlue, width: 2),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        children: [
-          Container(
-            padding: EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: vsCodeBlue.withOpacity(0.1),
-              borderRadius: BorderRadius.only(
-                topLeft: Radius.circular(6),
-                topRight: Radius.circular(6),
+    return SizedBox(
+      height: 200,
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border.all(color: vsCodeBlue, width: 2),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          children: [
+            Container(
+              padding: EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: vsCodeBlue.withOpacity(0.1),
+                borderRadius: BorderRadius.only(
+                  topLeft: Radius.circular(6),
+                  topRight: Radius.circular(6),
+                ),
               ),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.show_chart, color: vsCodeBlue, size: 16),
-                SizedBox(width: 8),
-                Text(
-                  '动态数据图表',
-                  style: TextStyle(
-                    color: vsCodeBlue,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                Spacer(),
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: dataKeys.map((key) {
-                      return Container(
-                        margin: EdgeInsets.only(left: 8),
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 12,
-                              height: 12,
-                              color: keyColors[key],
-                            ),
-                            SizedBox(width: 4),
-                            Text(
-                              key,
-                              style: TextStyle(color: vsCodeText, fontSize: 10),
-                            ),
-                          ],
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            child: chartMode && dataKeys.isNotEmpty
-                ? _buildDynamicChart()
-                : Center(
-                    child: Text(
-                      chartMode
-                          ? '等待数据...\n格式示例: [data:123,BatVoltage:13.24,Demo:2]'
-                          : '图表显示区域\n点击"开启图表"启用可视化',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: vsCodeTextSecondary),
+              child: Row(
+                children: [
+                  Icon(Icons.show_chart, color: vsCodeBlue, size: 16),
+                  SizedBox(width: 8),
+                  Text(
+                    '动态数据图表',
+                    style: TextStyle(
+                      color: vsCodeBlue,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
-          ),
-        ],
+                  Expanded(
+                    child: dataKeys.isEmpty
+                        ? Container()
+                        : Text(
+                            '数据键: ${dataKeys.join(', ')}',
+                            style: TextStyle(color: vsCodeText, fontSize: 10),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: chartMode && dataKeys.isNotEmpty
+                  ? _buildDynamicChart()
+                  : Center(
+                      child: Text(
+                        chartMode
+                            ? '等待数据...\n格式示例: [data:123,BatVoltage:13.24,Demo:2]'
+                            : '图表显示区域\n点击"开启图表"启用可视化',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: vsCodeTextSecondary),
+                      ),
+                    ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1157,10 +1436,52 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   }
 }
 
+// 数据片段类型定义
+enum SegmentType { text, hex }
+
+// 数据片段类
+class DataSegment {
+  final String content;
+  final SegmentType type;
+  
+  DataSegment({required this.content, required this.type});
+}
+
 // 数据行类型定义
 enum LineType { send, receive, system }
 
-// 数据行类
+// 增强的数据行类
+class EnhancedDataLine {
+  final List<DataSegment> segments;
+  final LineType lineType;
+  final DateTime? timestamp;
+  
+  EnhancedDataLine({
+    required this.segments,
+    required this.lineType,
+    this.timestamp,
+  });
+  
+  @override
+  String toString() {
+    String content = segments.map((segment) => segment.content).join();
+    if (timestamp != null) {
+      String timeStr = timestamp!.toString().substring(11, 19);
+      switch (lineType) {
+        case LineType.send:
+          return '$timeStr 发送: $content';
+        case LineType.receive:
+          return '$timeStr 接收: $content';
+        case LineType.system:
+          return '$timeStr $content';
+      }
+    } else {
+      return content;
+    }
+  }
+}
+
+// 旧数据行类（保持向后兼容）
 class DataLine {
   final String text;
   final LineType type;

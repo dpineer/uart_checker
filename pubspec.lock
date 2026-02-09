@@ -77,10 +77,10 @@ packages:
     dependency: transitive
     description:
       name: ffi
-      sha256: "289279317b4b16eb2bb7e271abccd4bf84ec9bdcbe999e278a94b804f5630418"
+      sha256: "13a6ccf6a459a125b3fcdb6ec73bd5ff90822e071207c663bfd1f70062d51d18"
       url: "https://pub.dev"
     source: hosted
-    version: "2.1.4"
+    version: "1.2.1"
   fl_chart:
     dependency: "direct main"
     description:
@@ -106,10 +106,10 @@ packages:
     dependency: "direct main"
     description:
       name: flutter_libserialport
-      sha256: f24b5fe6f1821d1c1b3bf2be737ca53f6b0ae78657032a790aa00abb810c8759
+      sha256: f3404f5ff4dfe714dedc41003323be662eeca542ff05495118f8d3fcb58e68f9
       url: "https://pub.dev"
     source: hosted
-    version: "0.6.0"
+    version: "0.2.3"
   flutter_lints:
     dependency: "direct dev"
     description:
@@ -156,10 +156,18 @@ packages:
     dependency: transitive
     description:
       name: libserialport
-      sha256: "392e1592def65282429832ec66fa25e9e163d3b37716b97691482e2406720727"
+      sha256: eddc9e648270ba47ab71e5551b63e40f1d7e157d88c7e95ed67474453f85dfe0
       url: "https://pub.dev"
     source: hosted
-    version: "0.3.0+1"
+    version: "0.2.0+3"
+  libusb:
+    dependency: transitive
+    description:
+      name: libusb
+      sha256: ca24c95f475eb53fac4dcdcd754b5a0b1b04d0bbf744f61163ae5d59197471c6
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.3.23+2"
   lints:
     dependency: transitive
     description:
@@ -216,6 +224,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.1.8"
+  quick_usb:
+    dependency: "direct main"
+    description:
+      name: quick_usb
+      sha256: "409367b9923fbf54259477df685d4a73b521490747b62d5241bd51ed47fbabec"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.4.0"
   selectable:
     dependency: "direct main"
     description:

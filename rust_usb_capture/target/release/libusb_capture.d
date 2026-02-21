@@ -1,0 +1,1 @@
+/media/dpiner/Source/Project/MyPrj/A_Persional_II/uart_checker/rust_usb_capture/target/release/libusb_capture.so: /media/dpiner/Source/Project/MyPrj/A_Persional_II/uart_checker/rust_usb_capture/src/lib.rs

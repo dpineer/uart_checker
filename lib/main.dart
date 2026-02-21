@@ -10,43 +10,16 @@ import 'package:flutter/services.dart';
 import 'package:flutter_libserialport/flutter_libserialport.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:quick_usb/quick_usb.dart' as quick_usb;
-import 'usb_packet_tab.dart';
+import 'usb_packet_native.dart';
+import 'usb_packet_tab_rust.dart';
 
-void main() async { // <--- 将 main 函数标记为 async
+void main() {
   // 在运行应用之前，确保插件系统已初始化
   WidgetsFlutterBinding.ensureInitialized();
   
-  // 核心修复：在这里初始化 quick_usb 插件，并等待其完成
-  await _initQuickUsb();
+  print('启动通信工具应用 - 使用Rust USB捕获实现');
   
   runApp(CommunicationToolApp());
-}
-
-Future<void> _initQuickUsb() async {
-  try {
-    print('正在初始化 QuickUsb...');
-    // 调用插件提供的初始化方法
-    bool success = await quick_usb.QuickUsb.init(); 
-    if (!success) {
-      // 如果 init 返回 false，手动抛出一个错误，让上面 catch 住
-      throw Exception('底层库初始化返回 false，插件实例未正确创建');
-    }
-    print('QuickUsb 初始化成功');
-  } catch (e) {
-    print('USB库初始化发生异常: $e');
-    
-    // 提供更详细的诊断信息，特别是对于 Linux
-    if (e.toString().contains('LateInitializationError')) {
-      print('错误诊断: QuickUsbPlatform.instance 未初始化，这通常意味着插件初始化失败。');
-      print('可能原因: 插件内部注册失败或平台特定实现加载失败');
-      print('请确保您的应用程序在启动时正确调用 quick_usb.QuickUsb.init()。');
-    } else if (Platform.isLinux && e.toString().contains('libusb')) {
-      print('错误提示: 在 Linux 环境下，可能缺少 libusb 库文件。');
-      print('解决方案: 请尝试运行命令: sudo apt update && sudo apt install libusb-1.0-0-dev');
-    } else {
-      print('其他错误: 请检查 QuickUsb 插件的配置和系统环境。');
-    }
-  }
 }
 
 class CommunicationToolApp extends StatelessWidget {
@@ -76,6 +49,7 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin {
+  int _selectedIndex = 0;
   late TabController _tabController;
   
   @override
@@ -90,35 +64,45 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     super.dispose();
   }
   
+  void _onDestinationSelected(int index) {
+    setState(() {
+      _selectedIndex = index;
+    });
+  }
+  
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text('通信工具', style: TextStyle(color: Color(0xFF569CD6))),
-        backgroundColor: Color(0xFF1E1E1E),
-        elevation: 0,
-        bottom: TabBar(
-          controller: _tabController,
-          tabs: [
-            Tab(
-              icon: Icon(Icons.settings_input_component, size: 20),
-              text: '串口通信',
-            ),
-            Tab(
-              icon: Icon(Icons.usb, size: 20),
-              text: 'USB报文解析',
-            ),
-          ],
-          labelColor: Color(0xFF569CD6),
-          unselectedLabelColor: Color(0xFF858585),
-          indicatorColor: Color(0xFF569CD6),
-        ),
-      ),
-      body: TabBarView(
-        controller: _tabController,
+      body: Row(
         children: [
-          SerialPortHomePage(),
-          UsbPacketTab(),
+          NavigationRail(
+            backgroundColor: Color(0xFF1E1E1E),
+            selectedIndex: _selectedIndex,
+            onDestinationSelected: _onDestinationSelected,
+            labelType: NavigationRailLabelType.selected,
+            destinations: [
+              NavigationRailDestination(
+                icon: Icon(Icons.settings_input_component, color: Color(0xFF858585)),
+                selectedIcon: Icon(Icons.settings_input_component, color: Color(0xFF569CD6)),
+                label: Text('串口通信', style: TextStyle(color: Color(0xFF858585))),
+              ),
+              NavigationRailDestination(
+                icon: Icon(Icons.usb, color: Color(0xFF858585)),
+                selectedIcon: Icon(Icons.usb, color: Color(0xFF569CD6)),
+                label: Text('USB报文解析', style: TextStyle(color: Color(0xFF858585))),
+              ),
+            ],
+          ),
+          VerticalDivider(thickness: 1, width: 1),
+          Expanded(
+            child: IndexedStack(
+              index: _selectedIndex,
+              children: [
+                SerialPortHomePage(),
+                UsbPacketTabRust(),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -669,16 +653,23 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   }
 
   void _copyReceivedData() {
-    if (_receivedLines.isEmpty) {
+    if (_receivedEnhancedLines.isNotEmpty) {
+      // 使用增强数据行进行复制
+      String textToCopy = _receivedEnhancedLines
+          .map((line) => line.toString())
+          .join('\n');
+      Clipboard.setData(ClipboardData(text: textToCopy));
+      _showMessage('内容已复制到剪贴板 (${_receivedEnhancedLines.length} 行)');
+    } else if (_receivedLines.isNotEmpty) {
+      // 使用普通数据行进行复制
+      String textToCopy = _receivedLines
+          .map((line) => line.toString())
+          .join('\n');
+      Clipboard.setData(ClipboardData(text: textToCopy));
+      _showMessage('内容已复制到剪贴板 (${_receivedLines.length} 行)');
+    } else {
       _showMessage('没有可复制的内容');
-      return;
     }
-
-    String textToCopy = _receivedLines
-        .map((line) => line.toString())
-        .join('\n');
-    Clipboard.setData(ClipboardData(text: textToCopy));
-    _showMessage('内容已复制到剪贴板 (${_receivedLines.length} 行)');
   }
 
   void _clearReceivedData() {

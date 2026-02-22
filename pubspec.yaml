@@ -13,8 +13,6 @@ dependencies:
   flutter_libserialport: ^0.2.3
   selectable: ^0.5.2
   fl_chart: ^1.1.1
-  quick_usb: ^0.4.0
-  ffi: ^1.2.1
   cupertino_icons: ^1.0.8
 
 dev_dependencies:

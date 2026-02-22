@@ -1,17 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:math' as math;
-import 'dart:typed_data';
-import 'dart:ui';
-import 'package:selectable/selectable.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_libserialport/flutter_libserialport.dart';
 import 'package:fl_chart/fl_chart.dart';
-import 'package:quick_usb/quick_usb.dart' as quick_usb;
-import 'usb_packet_native.dart';
-import 'usb_packet_tab_rust.dart';
 
 void main() {
   // 在运行应用之前，确保插件系统已初始化
@@ -55,7 +48,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    _tabController = TabController(length: 1, vsync: this);
   }
   
   @override
@@ -86,11 +79,6 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                 selectedIcon: Icon(Icons.settings_input_component, color: Color(0xFF569CD6)),
                 label: Text('串口通信', style: TextStyle(color: Color(0xFF858585))),
               ),
-              NavigationRailDestination(
-                icon: Icon(Icons.usb, color: Color(0xFF858585)),
-                selectedIcon: Icon(Icons.usb, color: Color(0xFF569CD6)),
-                label: Text('USB报文解析', style: TextStyle(color: Color(0xFF858585))),
-              ),
             ],
           ),
           VerticalDivider(thickness: 1, width: 1),
@@ -99,7 +87,6 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
               index: _selectedIndex,
               children: [
                 SerialPortHomePage(),
-                UsbPacketTabRust(),
               ],
             ),
           ),
@@ -121,7 +108,6 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   static const Color vsCodeBlue = Color(0xFF569CD6);
   static const Color vsCodeText = Color(0xFFD4D4D4);
   static const Color vsCodeTextSecondary = Color(0xFF858585);
-  static const Color vsCodeOrange = Color(0xFFCE9178);
   static const Color receiveColor = Color(0xFF4EC9B0);
   static const Color sendColor = Color(0xFFCE9178);
   static const Color hexBackgroundColor = Color(0xFF334D4A); // HEX数据背景色
@@ -377,12 +363,6 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
     return printableRatio > 0.7; // 如果可打印字符超过70%，认为是有效文本
   }
 
-  // 判断字符是否为HEX字符
-  bool _isHexCharacter(String char) {
-    if (char.length != 1) return false;
-    return RegExp(r'[0-9A-Fa-f]').hasMatch(char);
-  }
-
   // 判断字符是否为正常字符（ASCII可打印字符+常见控制字符）
   bool _isNormalCharacter(int codePoint) {
     // ASCII可打印字符（包括空格、标点、数字、字母）
@@ -473,6 +453,43 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
     }
     
     return result.toString();
+  }
+
+  // 将HEX字符串转换为可读文本（如果可能）
+  String _convertHexToReadableText(String text) {
+    // 检查是否包含HEX格式的数据（如 [6536][5230] 这样的格式）
+    RegExp hexBracketPattern = RegExp(r'\[([0-9A-Fa-f]{2,})\]');
+    String result = text;
+    
+    for (Match match in hexBracketPattern.allMatches(text)) {
+      String hexContent = match.group(1)!;
+      
+      // 尝试将HEX内容转换为文本
+      if (hexContent.length % 2 == 0) { // 确保是完整的字节序列
+        try {
+          List<int> bytes = [];
+          for (int i = 0; i < hexContent.length; i += 2) {
+            String hexByte = hexContent.substring(i, i + 2);
+            bytes.add(int.parse(hexByte, radix: 16));
+          }
+          
+          // 尝试将字节转换为UTF-8文本
+          String convertedText = utf8.decode(bytes, allowMalformed: true);
+          // 过滤掉不可打印字符
+          convertedText = convertedText.replaceAll(RegExp(r'[^\x20-\x7E]'), '');
+          
+          // 如果转换后的文本有意义，则替换原始HEX
+          if (convertedText.isNotEmpty && convertedText.trim().isNotEmpty) {
+            result = result.replaceAll('[${hexContent}]', '[$convertedText]');
+          }
+        } catch (e) {
+          // 如果转换失败，保留原始格式
+          continue;
+        }
+      }
+    }
+    
+    return result;
   }
 
   // 添加增强的数据行
@@ -601,8 +618,11 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
     // 先处理不正常字符
     String processedString = _processUnusualCharacters(dataString);
     
+    // 尝试将HEX格式转换为可读文本
+    String convertedString = _convertHexToReadableText(processedString);
+    
     // 使用智能分割算法处理混合数据
-    List<DataSegment> segments = _splitTextAndHex(processedString);
+    List<DataSegment> segments = _splitTextAndHex(convertedString);
     _addEnhancedLine(segments, LineType.receive);
   }
 

@@ -675,6 +675,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   void _clearReceivedData() {
     setState(() {
       _receivedLines.clear();
+      _receivedEnhancedLines.clear();
       _addLine("清空记录", LineType.system);
       chartData.clear();
       dataKeys.clear();
@@ -877,6 +878,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
       child: SelectableText(
         dataLine.toString(),
         style: TextStyle(color: lineColor, fontSize: 14),
+        selectionControls: MaterialTextSelectionControls(), // 启用文本选择控件
       ),
     );
   }

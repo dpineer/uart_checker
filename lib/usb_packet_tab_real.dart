@@ -516,6 +516,7 @@ class _UsbPacketTabRealState extends State<UsbPacketTabReal> {
       child: SelectableText(
         displayText,
         style: TextStyle(color: lineColor, fontSize: 14),
+        selectionControls: MaterialTextSelectionControls(), // 启用文本选择控件
       ),
     );
   }

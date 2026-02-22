@@ -314,9 +314,17 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
 
   // 尝试多种解码方式[8](@ref)
   String _tryMultipleDecodings(Uint8List data) {
-    // 首先尝试UTF-8解码
+    // 首先尝试UTF-8解码（支持中文等多字节字符）
     try {
       String result = utf8.decode(data, allowMalformed: false);
+      if (_isValidText(result)) {
+        return result;
+      }
+    } catch (e) {}
+
+    // 尝试UTF-8解码，允许错误字符
+    try {
+      String result = utf8.decode(data, allowMalformed: true);
       if (_isValidText(result)) {
         return result;
       }
@@ -352,18 +360,37 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
 
     // 计算可打印字符的比例
     int printableCount = 0;
+    int chineseCharCount = 0; // 计算中文字符数量
     for (int i = 0; i < text.length; i++) {
       int code = text.codeUnitAt(i);
+      // ASCII可打印字符（包括空格、标点、数字、字母）
       if (code >= 32 && code <= 126 || code == 10 || code == 13 || code == 9) {
         printableCount++;
+      }
+      // 中文字符范围
+      else if ((code >= 0x4E00 && code <= 0x9FFF) || // CJK统一汉字
+               (code >= 0x3400 && code <= 0x4DBF) || // CJK扩展A
+               (code >= 0x20000 && code <= 0x2A6DF) || // CJK扩展B
+               (code >= 0x2A700 && code <= 0x2B73F) || // CJK扩展C
+               (code >= 0x2B740 && code <= 0x2B81F) || // CJK扩展D
+               (code >= 0x2B820 && code <= 0x2CEAF) || // CJK扩展E
+               (code >= 0xF900 && code <= 0xFAFF) || // CJK兼容汉字
+               (code >= 0x2F800 && code <= 0x2FA1F)) { // CJK兼容汉字补充
+        printableCount++;
+        chineseCharCount++;
       }
     }
 
     double printableRatio = printableCount / text.length;
-    return printableRatio > 0.7; // 如果可打印字符超过70%，认为是有效文本
+    // 如果中文字符较多，适当降低可打印字符比例要求
+    if (chineseCharCount > 0) {
+      return printableRatio > 0.5; // 中文文本要求50%以上为可打印字符
+    } else {
+      return printableRatio > 0.7; // 英文文本要求70%以上为可打印字符
+    }
   }
 
-  // 判断字符是否为正常字符（ASCII可打印字符+常见控制字符）
+  // 判断字符是否为正常字符（ASCII可打印字符+常见控制字符+中文字符）
   bool _isNormalCharacter(int codePoint) {
     // ASCII可打印字符（包括空格、标点、数字、字母）
     if (codePoint >= 32 && codePoint <= 126) return true;
@@ -371,8 +398,17 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
     // 常见控制字符：换行、回车、制表符
     if (codePoint == 10 || codePoint == 13 || codePoint == 9) return true;
     
-    // 扩展ASCII中的常见符号（如°、±等）
-    // 这里可以扩展更多常见符号
+    // 中文字符范围
+    if ((codePoint >= 0x4E00 && codePoint <= 0x9FFF) || // CJK统一汉字
+        (codePoint >= 0x3400 && codePoint <= 0x4DBF) || // CJK扩展A
+        (codePoint >= 0x20000 && codePoint <= 0x2A6DF) || // CJK扩展B
+        (codePoint >= 0x2A700 && codePoint <= 0x2B73F) || // CJK扩展C
+        (codePoint >= 0x2B740 && codePoint <= 0x2B81F) || // CJK扩展D
+        (codePoint >= 0x2B820 && codePoint <= 0x2CEAF) || // CJK扩展E
+        (codePoint >= 0xF900 && codePoint <= 0xFAFF) || // CJK兼容汉字
+        (codePoint >= 0x2F800 && codePoint <= 0x2FA1F)) { // CJK兼容汉字补充
+      return true;
+    }
     
     return false; // 其他字符视为不正常
   }
@@ -395,41 +431,51 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   List<DataSegment> _splitTextAndHex(String text) {
     List<DataSegment> segments = [];
     
-    // 使用正则表达式查找长HEX序列（≥12个连续HEX字符）
-    RegExp hexPattern = RegExp(r'([0-9A-Fa-f]{12,})');
-    int lastIndex = 0;
-    
-    for (RegExpMatch match in hexPattern.allMatches(text)) {
-      // 添加匹配前的文本
-      if (match.start > lastIndex) {
-        String textSegment = text.substring(lastIndex, match.start);
-        if (textSegment.trim().isNotEmpty) {
+    // 只有在HEX模式下才进行HEX序列识别，文本模式下只处理明显的HEX格式数据
+    if (hexMode) {
+      // 使用正则表达式查找长HEX序列（≥12个连续HEX字符）
+      RegExp hexPattern = RegExp(r'([0-9A-Fa-f]{12,})');
+      int lastIndex = 0;
+      
+      for (RegExpMatch match in hexPattern.allMatches(text)) {
+        // 添加匹配前的文本
+        if (match.start > lastIndex) {
+          String textSegment = text.substring(lastIndex, match.start);
+          if (textSegment.trim().isNotEmpty) {
+            segments.add(DataSegment(
+              content: textSegment,
+              type: SegmentType.text,
+            ));
+          }
+        }
+        
+        // 添加HEX序列（带空格格式化）
+        String hexContent = match.group(0)!;
+        segments.add(DataSegment(
+          content: _formatHexWithSpaces(hexContent),
+          type: SegmentType.hex,
+        ));
+        
+        lastIndex = match.end;
+      }
+      
+      // 添加剩余文本
+      if (lastIndex < text.length) {
+        String remainingText = text.substring(lastIndex);
+        if (remainingText.trim().isNotEmpty) {
           segments.add(DataSegment(
-            content: textSegment,
+            content: remainingText,
             type: SegmentType.text,
           ));
         }
       }
-      
-      // 添加HEX序列（带空格格式化）
-      String hexContent = match.group(0)!;
+    } else {
+      // 文本模式下，只处理明确的HEX格式数据（如 [49 20 28 38 38 32 31 32] 这样的格式）
+      // 保持原始文本，不做特殊处理
       segments.add(DataSegment(
-        content: _formatHexWithSpaces(hexContent),
-        type: SegmentType.hex,
+        content: text,
+        type: SegmentType.text,
       ));
-      
-      lastIndex = match.end;
-    }
-    
-    // 添加剩余文本
-    if (lastIndex < text.length) {
-      String remainingText = text.substring(lastIndex);
-      if (remainingText.trim().isNotEmpty) {
-        segments.add(DataSegment(
-          content: remainingText,
-          type: SegmentType.text,
-        ));
-      }
     }
     
     return segments;
@@ -473,14 +519,21 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
             bytes.add(int.parse(hexByte, radix: 16));
           }
           
-          // 尝试将字节转换为UTF-8文本
+          // 尝试将字节转换为UTF-8文本，特别处理中文字符
           String convertedText = utf8.decode(bytes, allowMalformed: true);
-          // 过滤掉不可打印字符
-          convertedText = convertedText.replaceAll(RegExp(r'[^\x20-\x7E]'), '');
+          // 保留中文字符和可打印字符，过滤掉真正的乱码字符
+          StringBuffer cleanText = StringBuffer();
+          for (int j = 0; j < convertedText.length; j++) {
+            int codePoint = convertedText.codeUnitAt(j);
+            if (_isNormalCharacter(codePoint)) {
+              cleanText.write(convertedText[j]);
+            }
+          }
+          String cleanConvertedText = cleanText.toString();
           
           // 如果转换后的文本有意义，则替换原始HEX
-          if (convertedText.isNotEmpty && convertedText.trim().isNotEmpty) {
-            result = result.replaceAll('[${hexContent}]', '[$convertedText]');
+          if (cleanConvertedText.isNotEmpty && cleanConvertedText.trim().isNotEmpty) {
+            result = result.replaceAll('[${hexContent}]', '[$cleanConvertedText]');
           }
         } catch (e) {
           // 如果转换失败，保留原始格式
@@ -615,15 +668,22 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   void _displayReceivedData(String dataString) {
     if (dataString.isEmpty) return;
     
-    // 先处理不正常字符
-    String processedString = _processUnusualCharacters(dataString);
-    
-    // 尝试将HEX格式转换为可读文本
-    String convertedString = _convertHexToReadableText(processedString);
-    
-    // 使用智能分割算法处理混合数据
-    List<DataSegment> segments = _splitTextAndHex(convertedString);
-    _addEnhancedLine(segments, LineType.receive);
+    // 只有在HEX模式下才进行特殊处理，否则直接显示原始数据
+    if (hexMode) {
+      // 先处理不正常字符
+      String processedString = _processUnusualCharacters(dataString);
+      
+      // 尝试将HEX格式转换为可读文本
+      String convertedString = _convertHexToReadableText(processedString);
+      
+      // 使用智能分割算法处理混合数据
+      List<DataSegment> segments = _splitTextAndHex(convertedString);
+      _addEnhancedLine(segments, LineType.receive);
+    } else {
+      // 非HEX模式下，直接处理原始数据，保留中文字符
+      List<DataSegment> segments = _splitTextAndHex(dataString);
+      _addEnhancedLine(segments, LineType.receive);
+    }
   }
 
   void _sendData() {

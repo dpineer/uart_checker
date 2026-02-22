@@ -41,3 +41,12 @@
 - 修改了从Rust获取数据包的逻辑，当_showHex为false时将HEX数据转换为文本格式
 - 修改了模拟数据生成的逻辑，确保遵循相同的显示规则
 - 现在只有在HEX显示选项打开时才会显示HEX格式的数据
+
+2026/2/22 下午4:58:33
+修改完成：解决了中文字符显示乱码的问题
+- 修改了_tryMultipleDecodings方法，增强UTF-8解码能力，支持中文字符
+- 修改了_isValidText方法，添加对中文字符范围的识别和验证
+- 修改了_isNormalCharacter方法，支持中文字符的判断
+- 修改了_displayReceivedData方法，根据hexMode决定是否进行特殊处理
+- 修改了_splitTextAndHex方法，根据hexMode决定是否进行HEX序列识别
+- 现在在文本模式下能正确显示中文字符，在HEX模式下才进行HEX格式处理

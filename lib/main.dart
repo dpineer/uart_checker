@@ -127,6 +127,9 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   bool chartMode = false;
   String inputData = "";
   bool isConnected = false;
+  bool _isAttemptingConnection = false;
+  bool _autoReconnect = false;
+  Timer? _reconnectTimer;
   bool showTimestamp = true;
 
   // 可用串口列表
@@ -172,6 +175,8 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
 
   @override
   void dispose() {
+    _autoReconnect = false;
+    _reconnectTimer?.cancel();
     _subscription?.cancel();
     _reader?.close();
     _serialPort?.close();
@@ -228,18 +233,19 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
     });
   }
 
-  void _connect() async {
+  void _connect({bool manual = true}) async {
     if (selectedPort.isEmpty) {
-      _showMessage('请选择串口');
+      if (manual) _showMessage('请选择串口');
       return;
     }
+
+    if (manual) _autoReconnect = true;
 
     try {
       _serialPort = SerialPort(selectedPort);
 
-      // 先打开串口[6](@ref)
       if (!_serialPort!.openReadWrite()) {
-        _showMessage('打开串口失败: ${SerialPort.lastError}');
+        _handleDisconnect();
         return;
       }
 
@@ -254,34 +260,47 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
       _serialPort!.config = config;
 
       _reader = SerialPortReader(_serialPort!, timeout: 10);
-      _subscription = _reader!.stream.listen(_onDataReceived);
+      _subscription = _reader!.stream.listen(
+        _onDataReceived,
+        onError: (e) => _handleDisconnect(),
+        onDone: () => _handleDisconnect(),
+      );
 
       setState(() {
         isConnected = true;
+        _isAttemptingConnection = false;
       });
 
       _addLine(
-        "串口连接成功 - 波特率: $selectedBaudRate, 数据位: $selectedDataBits, 停止位: $selectedStopBits, 校验: $selectedParity",
+        "串口连接成功 - $selectedBaudRate $selectedDataBits$selectedParity$selectedStopBits",
         LineType.system,
       );
-      _showMessage('串口连接成功');
     } catch (e) {
-      _showMessage('连接失败: $e');
+      _handleDisconnect();
+    }
+  }
+
+  void _handleDisconnect() {
+    _subscription?.cancel();
+    _reader?.close();
+    _serialPort?.close();
+
+    if (mounted) {
+      setState(() {
+        isConnected = false;
+        if (_autoReconnect) {
+          _isAttemptingConnection = true;
+          _reconnectTimer?.cancel();
+          _reconnectTimer = Timer(Duration(milliseconds: 10), () => _connect(manual: false));
+        }
+      });
     }
   }
 
   void _disconnect() {
-    _subscription?.cancel();
-    _reader?.close();
-    _serialPort?.close();
-    _serialPort?.dispose();
-    _dataTimeoutTimer?.cancel();
-    _dataBuffer.clear();
-
-    setState(() {
-      isConnected = false;
-    });
-
+    _autoReconnect = false;
+    _reconnectTimer?.cancel();
+    _handleDisconnect();
     _addLine("串口已断开", LineType.system);
   }
 
@@ -806,11 +825,13 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
             margin: EdgeInsets.all(8),
             padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
-              color: isConnected ? Colors.green : Colors.red,
+              color: isConnected 
+                  ? Colors.green 
+                  : (_autoReconnect ? Colors.orange : Colors.red),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Text(
-              isConnected ? '已连接' : '未连接',
+              isConnected ? '已连接' : (_autoReconnect ? '重连中...' : '未连接'),
               style: TextStyle(color: Colors.white, fontSize: 12),
             ),
           ),
@@ -1401,17 +1422,19 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
                   child: Text(value),
                 );
               }).toList(),
-              onChanged: isConnected
-                  ? null
-                  : (newValue) {
-                      setState(() {
-                        if (label == '串口号') selectedPort = newValue!;
-                        if (label == '波特率') selectedBaudRate = newValue!;
-                        if (label == '数据位') selectedDataBits = newValue!;
-                        if (label == '停止位') selectedStopBits = newValue!;
-                        if (label == '校验码') selectedParity = newValue!;
-                      });
-                    },
+              onChanged: (newValue) {
+                setState(() {
+                  if (label == '串口号') selectedPort = newValue!;
+                  if (label == '波特率') selectedBaudRate = newValue!;
+                  if (label == '数据位') selectedDataBits = newValue!;
+                  if (label == '停止位') selectedStopBits = newValue!;
+                  if (label == '校验码') selectedParity = newValue!;
+                });
+                if (isConnected) {
+                  _addLine("配置变更，正在重启串口...", LineType.system);
+                  _handleDisconnect(); // 触发自动重连逻辑
+                }
+              },
             ),
           ),
         ),

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_libserialport/flutter_libserialport.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'websocket_server.dart';
 
 void main() {
   // 在运行应用之前，确保插件系统已初始化
@@ -162,12 +163,18 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
     Color(0xFFD7BA7D),
   ];
 
+  // WebSocket服务器相关变量
+  WebSocketServer? _webSocketServer;
+  bool _isWebSocketServerRunning = false;
+  int _webSocketPort = WebSocketServer.DEFAULT_PORT;
+
   @override
   void initState() {
     super.initState();
     _refreshPortList();
     _addLine("等待接收数据...", LineType.system);
     _receiveScrollController.addListener(_scrollListener);
+    _initWebSocketServer();
   }
 
   @override
@@ -179,7 +186,79 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
     _dataTimeoutTimer?.cancel();
     _dataBuffer.clear();
     _receiveScrollController.dispose();
+    _stopWebSocketServer();
     super.dispose();
+  }
+
+  // 初始化WebSocket服务器
+  void _initWebSocketServer() async {
+    _webSocketServer = WebSocketServer();
+    _webSocketServer!.addOnReceiveCallback(_handleWebSocketDataReceived);
+    _webSocketServer!.addOnClientConnectCallback(_handleWebSocketClientConnect);
+    _webSocketServer!.addOnClientDisconnectCallback(_handleWebSocketClientDisconnect);
+    
+    try {
+      await _webSocketServer!.start(port: _webSocketPort);
+      _isWebSocketServerRunning = true;
+      _addLine("WebSocket服务器启动在端口: ${_webSocketServer!.port}", LineType.system);
+    } catch (e) {
+      _addLine("WebSocket服务器启动失败: $e", LineType.system);
+    }
+  }
+
+  // 停止WebSocket服务器
+  void _stopWebSocketServer() {
+    if (_webSocketServer != null && _isWebSocketServerRunning) {
+      _webSocketServer!.stop();
+      _isWebSocketServerRunning = false;
+      _addLine("WebSocket服务器已停止", LineType.system);
+    }
+  }
+
+  // 处理WebSocket接收到的数据
+  void _handleWebSocketDataReceived(String data) {
+    _addLine("WebSocket接收: $data", LineType.receive);
+    
+    // 如果串口已连接，将WebSocket数据转发到串口
+    if (isConnected && _serialPort != null) {
+      try {
+        Uint8List dataToSend;
+        if (hexMode) {
+          final cleanedData = data.replaceAll(RegExp(r'[^0-9A-Fa-f]'), '');
+          if (cleanedData.isEmpty) return;
+          
+          final dataList = <int>[];
+          for (int i = 0; i < cleanedData.length; i += 2) {
+            final hexByte = cleanedData.substring(i, math.min(i + 2, cleanedData.length));
+            dataList.add(int.parse(hexByte, radix: 16));
+          }
+          dataToSend = Uint8List.fromList(dataList);
+        } else {
+          dataToSend = Uint8List.fromList(utf8.encode(data + '\r\n'));
+        }
+
+        _serialPort!.write(dataToSend);
+      } catch (e) {
+        _addLine("转发WebSocket数据到串口失败: $e", LineType.system);
+      }
+    }
+  }
+
+  // 处理WebSocket客户端连接
+  void _handleWebSocketClientConnect(String clientInfo) {
+    _addLine("WebSocket客户端连接: $clientInfo", LineType.system);
+  }
+
+  // 处理WebSocket客户端断开连接
+  void _handleWebSocketClientDisconnect(String clientInfo) {
+    _addLine("WebSocket客户端断开: $clientInfo", LineType.system);
+  }
+
+  // 将串口数据发送到WebSocket客户端
+  void _sendToWebSocket(String data) {
+    if (_webSocketServer != null && _isWebSocketServerRunning) {
+      _webSocketServer!.broadcast(data);
+    }
   }
 
   void _scrollListener() {
@@ -679,10 +758,12 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
       // 使用智能分割算法处理混合数据
       List<DataSegment> segments = _splitTextAndHex(convertedString);
       _addEnhancedLine(segments, LineType.receive);
+      _sendToWebSocket(convertedString); // 将数据发送到WebSocket客户端
     } else {
       // 非HEX模式下，直接处理原始数据，保留中文字符
       List<DataSegment> segments = _splitTextAndHex(dataString);
       _addEnhancedLine(segments, LineType.receive);
+      _sendToWebSocket(dataString); // 将数据发送到WebSocket客户端
     }
   }
 

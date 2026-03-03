@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>UART Checker WebSocket 测试客户端</title>
+    <style>
+        body {
+            font-family: 'Courier New', monospace;
+            background-color: #1e1e1e;
+            color: #d4d4d4;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .panel {
+            background-color: #252526;
+            border: 2px solid #569cd6;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            color: #569cd6;
+            text-align: center;
+        }
+        input, button, textarea {
+            background-color: #3c3c3c;
+            color: #d4d4d4;
+            border: 1px solid #569cd6;
+            padding: 8px;
+            margin: 5px 0;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+        }
+        button {
+            background-color: #007acc;
+            cursor: pointer;
+            min-width: 100px;
+        }
+        button:hover {
+            background-color: #005a9e;
+        }
+        #messages {
+            height: 300px;
+            overflow-y: auto;
+            border: 1px solid #569cd6;
+            padding: 10px;
+            background-color: #1e1e1e;
+            font-family: 'Courier New', monospace;
+            white-space: pre-wrap;
+        }
+        .status-connected {
+            color: #4ec9b0;
+        }
+        .status-disconnected {
+            color: #ce9178;
+        }
+        .received {
+            color: #4ec9b0;
+        }
+        .sent {
+            color: #ce9178;
+        }
+        .system {
+            color: #858585;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>UART Checker WebSocket 测试客户端</h1>
+        
+        <div class="panel">
+            <h3>连接设置</h3>
+            <label>WebSocket 服务器地址: </label>
+            <input type="text" id="serverUrl" value="ws://localhost:8080" placeholder="ws://localhost:8080">
+            <br>
+            <button onclick="connectWebSocket()">连接</button>
+            <button onclick="disconnectWebSocket()">断开</button>
+            <span id="connectionStatus" class="status-disconnected">未连接</span>
+        </div>
+        
+        <div class="panel">
+            <h3>发送数据</h3>
+            <textarea id="sendData" rows="3" placeholder="输入要发送的数据..."></textarea>
+            <br>
+            <button onclick="sendData()">发送数据</button>
+            <button onclick="sendHexData()">发送HEX</button>
+        </div>
+        
+        <div class="panel">
+            <h3>消息记录</h3>
+            <div id="messages"></div>
+            <br>
+            <button onclick="clearMessages()">清空记录</button>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        
+        function logMessage(message, type = 'system') {
+            const messagesDiv = document.getElementById('messages');
+            const timestamp = new Date().toLocaleTimeString();
+            const messageElement = document.createElement('div');
+            messageElement.className = type;
+            messageElement.textContent = `[${timestamp}] ${message}`;
+            messagesDiv.appendChild(messageElement);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+        
+        function connectWebSocket() {
+            const serverUrl = document.getElementById('serverUrl').value;
+            
+            if (ws) {
+                ws.close();
+            }
+            
+            try {
+                ws = new WebSocket(serverUrl);
+                
+                ws.onopen = function(event) {
+                    document.getElementById('connectionStatus').textContent = '已连接';
+                    document.getElementById('connectionStatus').className = 'status-connected';
+                    logMessage('WebSocket 连接已建立', 'system');
+                };
+                
+                ws.onmessage = function(event) {
+                    logMessage('接收: ' + event.data, 'received');
+                };
+                
+                ws.onclose = function(event) {
+                    document.getElementById('connectionStatus').textContent = '已断开';
+                    document.getElementById('connectionStatus').className = 'status-disconnected';
+                    logMessage('WebSocket 连接已断开', 'system');
+                };
+                
+                ws.onerror = function(error) {
+                    logMessage('WebSocket 错误: ' + error, 'system');
+                };
+            } catch (e) {
+                logMessage('连接失败: ' + e, 'system');
+            }
+        }
+        
+        function disconnectWebSocket() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+        
+        function sendData() {
+            const data = document.getElementById('sendData').value;
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(data);
+                logMessage('发送: ' + data, 'sent');
+            } else {
+                logMessage('WebSocket 未连接', 'system');
+            }
+        }
+        
+        function sendHexData() {
+            const data = document.getElementById('sendData').value;
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                // 尝试将输入转换为HEX格式
+                let hexData = data;
+                if (!/^[0-9A-Fa-f\s]+$/.test(data.replace(/\s/g, ''))) {
+                    // 如果不是HEX格式，转换为HEX
+                    hexData = '';
+                    for (let i = 0; i < data.length; i++) {
+                        hexData += data.charCodeAt(i).toString(16).padStart(2, '0') + ' ';
+                    }
+                }
+                ws.send(hexData.trim());
+                logMessage('发送HEX: ' + hexData.trim(), 'sent');
+            } else {
+                logMessage('WebSocket 未连接', 'system');
+            }
+        }
+        
+        function clearMessages() {
+            document.getElementById('messages').innerHTML = '';
+        }
+    </script>
+</body>
+</html>

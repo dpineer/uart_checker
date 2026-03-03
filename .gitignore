@@ -3,6 +3,8 @@
 *.log
 *.pyc
 *.swp
+调试日志.txt
+system_prompt.txt
 .DS_Store
 .atom/
 .build/

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // 添加Clipboard相关导入
 import 'package:flutter_libserialport/flutter_libserialport.dart';
 import 'websocket_server.dart';
 import 'main.dart'; // 导入main.dart以访问SerialPortHomePage
@@ -394,11 +395,65 @@ class _WebSocketControlPageState extends State<WebSocketControlPage> {
                     ),
                     child: Row(
                       children: [
-                        Text(
-                          '客户端连接数: ${webSocketServer?.getClientCount() ?? 0}',
-                          style: TextStyle(
-                            color: vsCodeText,
-                            fontSize: 12,
+                        Expanded(
+                          child: Text(
+                            '客户端连接数: ${webSocketServer?.getClientCount() ?? 0}',
+                            style: TextStyle(
+                              color: vsCodeText,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                        ElevatedButton(
+                          onPressed: () {
+                            if (webSocketServer != null) {
+                              // 复制token到剪贴板
+                              Clipboard.setData(ClipboardData(text: webSocketServer!.authToken));
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('认证Token已复制到剪贴板'),
+                                  backgroundColor: vsCodeBlue,
+                                  duration: Duration(seconds: 2),
+                                ),
+                              );
+                            }
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: vsCodeBlue,
+                            foregroundColor: Colors.white,
+                            padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                          ),
+                          child: Text(
+                            '复制Token',
+                            style: TextStyle(fontSize: 10),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  SizedBox(height: 8),
+                  Container(
+                    padding: EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: vsCodeSurface,
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(
+                        color: vsCodeBlue,
+                        width: 1,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '认证Token: ${webSocketServer?.authToken ?? '加载中...'}',
+                            style: TextStyle(
+                              color: vsCodeText,
+                              fontSize: 10,
+                            ),
                           ),
                         ),
                       ],

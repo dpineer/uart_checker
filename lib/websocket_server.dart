@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
+import 'dart:math';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/io.dart';
 
@@ -31,8 +32,9 @@ class _WebSocketClient {
   final WebSocket webSocket;
   final String ipAddress;
   final int port;
+  bool isAuthenticated; // 添加认证状态
 
-  _WebSocketClient(this.webSocket, this.ipAddress, this.port);
+  _WebSocketClient(this.webSocket, this.ipAddress, this.port, {this.isAuthenticated = false});
 
   // 代理WebSocket的方法
   void add(dynamic data) {
@@ -53,6 +55,28 @@ class WebSocketServer {
   final List<Function(String clientInfo)> _onClientDisconnectCallbacks = [];
   bool _isRunning = false;
   int _currentPort = DEFAULT_PORT;
+  
+  // 添加token验证相关字段
+  final String _authToken;
+  final bool _requireAuth;
+  final Random _random = Random();
+
+  // 构造函数添加token参数
+  WebSocketServer({String? authToken, bool requireAuth = true}) 
+      : _authToken = authToken ?? _generateRandomToken(),
+        _requireAuth = requireAuth;
+
+  // 生成随机token的方法
+  static String _generateRandomToken() {
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    final random = Random();
+    return String.fromCharCodes(
+      Iterable.generate(32, (_) => chars.codeUnitAt(random.nextInt(chars.length)))
+    );
+  }
+
+  // 获取当前token（用于调试和管理）
+  String get authToken => _authToken;
 
   int get port => _currentPort;
 
@@ -147,9 +171,31 @@ class WebSocketServer {
             try {
               final jsonData = jsonDecode(data);
               if (jsonData is Map<String, dynamic>) {
-                // 调用所有注册的命令回调函数
-                for (var callback in _onCommandCallbacks) {
-                  callback(jsonData);
+                // 检查是否为认证命令
+                if (jsonData['command'] == 'auth') {
+                  _handleAuthCommand(client, jsonData);
+                } else {
+                  // 检查客户端是否已认证（如果需要认证）
+                  if (_requireAuth && !client.isAuthenticated) {
+                    // 发送错误响应，要求先进行认证
+                    final authErrorResponse = {
+                      'type': 'error',
+                      'data': {
+                        'command': jsonData['command'],
+                        'error': '未认证的客户端，请先发送认证命令',
+                        'code': 4007
+                      },
+                      'timestamp': DateTime.now().toIso8601String()
+                    };
+                    client.add(jsonEncode(authErrorResponse));
+                    print('阻止未认证客户端执行命令: $ipAddress');
+                    return;
+                  }
+                  
+                  // 调用所有注册的命令回调函数
+                  for (var callback in _onCommandCallbacks) {
+                    callback(jsonData);
+                  }
                 }
               } else {
                 print('收到的数据不是有效的JSON对象: $data');
@@ -185,6 +231,41 @@ class WebSocketServer {
       request.response.statusCode = 400;
       request.response.write('This is a WebSocket server. Connect using a WebSocket client.');
       request.response.close();
+    }
+  }
+
+  // 处理认证命令
+  void _handleAuthCommand(_WebSocketClient client, Map<String, dynamic> command) {
+    final token = command['data']['token'] as String?;
+    
+    if (token == _authToken) {
+      client.isAuthenticated = true;
+      final authSuccessResponse = {
+        'type': 'command_response',
+        'data': {
+          'command': 'auth',
+          'success': true,
+          'message': '认证成功'
+        },
+        'timestamp': DateTime.now().toIso8601String()
+      };
+      client.add(jsonEncode(authSuccessResponse));
+      print('客户端认证成功: ${client.ipAddress}');
+    } else {
+      final authErrorResponse = {
+        'type': 'error',
+        'data': {
+          'command': 'auth',
+          'error': '认证失败，无效的token',
+          'code': 4008
+        },
+        'timestamp': DateTime.now().toIso8601String()
+      };
+      client.add(jsonEncode(authErrorResponse));
+      print('客户端认证失败: ${client.ipAddress}');
+      
+      // 可选：认证失败后关闭连接
+      // client.close(code: 1008, reason: 'Authentication failed');
     }
   }
 

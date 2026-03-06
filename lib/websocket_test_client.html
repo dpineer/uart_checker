@@ -216,7 +216,13 @@
             </div>
             
             <div class="form-group">
+                <label for="authToken">认证Token:</label>
+                <input type="text" id="authToken" placeholder="输入认证Token">
+            </div>
+            
+            <div class="form-group">
                 <button id="connectBtn" onclick="connectWebSocket()">连接</button>
+                <button id="authBtn" onclick="authenticate()" disabled>认证</button>
                 <button id="disconnectBtn" onclick="disconnectWebSocket()" disabled>断开</button>
             </div>
             
@@ -271,6 +277,7 @@
     <script>
         let ws = null;
         let isConnected = false;
+        let isAuthenticated = false; // 添加认证状态
         let availablePorts = [];
 
         function logMessage(message, type = 'system') {
@@ -289,6 +296,7 @@
             statusDiv.textContent = message;
             
             document.getElementById('connectBtn').disabled = status === 'connected';
+            document.getElementById('authBtn').disabled = status !== 'connected' || isAuthenticated; // 已认证后禁用认证按钮
             document.getElementById('disconnectBtn').disabled = status !== 'connected';
         }
 
@@ -300,7 +308,8 @@
                 
                 ws.onopen = function(event) {
                     isConnected = true;
-                    updateConnectionStatus('connected', '已连接到WebSocket服务器');
+                    isAuthenticated = false; // 连接后重置认证状态
+                    updateConnectionStatus('connected', '已连接到WebSocket服务器 (未认证)');
                     logMessage('WebSocket连接已建立', 'system');
                 };
                 
@@ -308,6 +317,18 @@
                     try {
                         const response = JSON.parse(event.data);
                         logMessage(`收到响应: ${JSON.stringify(response, null, 2)}`, 'response');
+                        
+                        // 处理认证响应
+                        if (response.type === 'command_response' && response.data.command === 'auth') {
+                            if (response.data.success) {
+                                isAuthenticated = true;
+                                updateConnectionStatus('connected', '已连接到WebSocket服务器 (已认证)');
+                                logMessage('认证成功！', 'system');
+                            } else {
+                                isAuthenticated = false;
+                                logMessage('认证失败！', 'error');
+                            }
+                        }
                         
                         // 处理端口列表响应
                         if (response.type === 'command_response' && response.data.ports) {
@@ -324,6 +345,13 @@
                         if (response.type === 'error') {
                             logMessage(`错误: ${response.data.error}`, 'error');
                         }
+                        
+                        // 处理未认证错误
+                        if (response.type === 'error' && response.data.code === 4007) {
+                            isAuthenticated = false;
+                            updateConnectionStatus('connected', '已连接到WebSocket服务器 (未认证)');
+                            logMessage('需要先进行认证！', 'error');
+                        }
                     } catch (e) {
                         logMessage(`收到数据: ${event.data}`, 'response');
                     }
@@ -331,6 +359,7 @@
                 
                 ws.onclose = function(event) {
                     isConnected = false;
+                    isAuthenticated = false;
                     updateConnectionStatus('disconnected', 'WebSocket连接已断开');
                     logMessage('WebSocket连接已关闭', 'system');
                 };
@@ -343,17 +372,50 @@
             }
         }
 
+        function authenticate() {
+            if (!isConnected || !ws) {
+                logMessage('请先连接WebSocket服务器', 'error');
+                return;
+            }
+            
+            const token = document.getElementById('authToken').value;
+            if (!token) {
+                logMessage('请输入认证Token', 'error');
+                return;
+            }
+            
+            const authCommand = {
+                command: 'auth',
+                data: {
+                    token: token
+                }
+            };
+            
+            try {
+                ws.send(JSON.stringify(authCommand));
+                logMessage(`发送认证: ${JSON.stringify(authCommand)}`, 'command');
+            } catch (e) {
+                logMessage(`发送认证失败: ${e}`, 'error');
+            }
+        }
+
         function disconnectWebSocket() {
             if (ws) {
                 ws.close();
                 ws = null;
                 isConnected = false;
+                isAuthenticated = false;
             }
         }
 
         function sendCommand(command, data) {
             if (!isConnected || !ws) {
                 logMessage('请先连接WebSocket服务器', 'error');
+                return;
+            }
+            
+            if (!isAuthenticated) {
+                logMessage('请先进行认证', 'error');
                 return;
             }
             

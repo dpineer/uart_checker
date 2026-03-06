@@ -213,7 +213,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
 
   // 初始化WebSocket服务器
   void _initWebSocketServer() async {
-    _webSocketServer = WebSocketServer();
+    _webSocketServer = WebSocketServer(); // 默认启用认证
     _webSocketServer!.addOnCommandCallback(_handleWebSocketCommandReceived);
     _webSocketServer!.addOnClientConnectCallback(_handleWebSocketClientConnect);
     _webSocketServer!.addOnClientDisconnectCallback(_handleWebSocketClientDisconnect);
@@ -222,6 +222,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
       await _webSocketServer!.start(port: _webSocketPort);
       _isWebSocketServerRunning = true;
       _addLine("WebSocket服务器启动在端口: ${_webSocketServer!.port}", LineType.system);
+      _addLine("WebSocket认证Token: ${_webSocketServer!.authToken}", LineType.system);
     } catch (e) {
       _addLine("WebSocket服务器启动失败: $e", LineType.system);
     }

@@ -1,0 +1,27 @@
+{
+  "name": "uart_checker",
+  "version": "1.0.0",
+  "description": "一个基于Flutter开发的跨平台串口通信调试工具，集成了实时数据可视化功能，支持Android和Windows平台。",
+  "main": "test_websocket_client.js",
+  "directories": {
+    "lib": "lib",
+    "test": "test"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dpineer/uart_checker.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/dpineer/uart_checker/issues"
+  },
+  "homepage": "https://github.com/dpineer/uart_checker#readme",
+  "dependencies": {
+    "ws": "^8.19.0"
+  }
+}

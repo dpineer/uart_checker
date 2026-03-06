@@ -4,6 +4,28 @@ import 'dart:async';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/io.dart';
 
+// 命令类型枚举
+enum WebSocketCommand {
+  connect,
+  disconnect,
+  listPorts,
+  sendText,
+  sendHex,
+  setConfig,
+  setHexMode,
+  setChartMode,
+  unknown
+}
+
+// 响应类型枚举
+enum WebSocketResponseType {
+  commandResponse,
+  serialData,
+  systemMessage,
+  portStatus,
+  error
+}
+
 // 内部类用于存储WebSocket客户端及其连接信息
 class _WebSocketClient {
   final WebSocket webSocket;
@@ -23,19 +45,32 @@ class _WebSocketClient {
 }
 
 class WebSocketServer {
-  static const int DEFAULT_PORT = 8080;
+  static const int DEFAULT_PORT = 9090;
   late HttpServer _server;
   final List<_WebSocketClient> _clients = [];
-  final List<Function(String data)> _onReceiveCallbacks = [];
+  final List<Function(Map<String, dynamic> command)> _onCommandCallbacks = [];
   final List<Function(String clientInfo)> _onClientConnectCallbacks = [];
   final List<Function(String clientInfo)> _onClientDisconnectCallbacks = [];
   bool _isRunning = false;
+  int _currentPort = DEFAULT_PORT;
 
-  int get port => _server.port;
+  int get port => _currentPort;
 
-  // 添加端口数据接收回调
+  // 添加命令接收回调（新API）
+  void addOnCommandCallback(Function(Map<String, dynamic> command) callback) {
+    _onCommandCallbacks.add(callback);
+  }
+
+  // 添加数据接收回调（旧API，用于向后兼容）
   void addOnReceiveCallback(Function(String data) callback) {
-    _onReceiveCallbacks.add(callback);
+    // 包装旧的回调函数以适应新的命令回调格式
+    addOnCommandCallback((command) {
+      // 如果是原始数据命令，调用旧的回调
+      if (command['command'] == 'raw_data' && command['data'] is Map) {
+        String message = command['data']['message'] ?? '';
+        callback(message);
+      }
+    });
   }
 
   // 添加客户端连接回调
@@ -54,21 +89,37 @@ class WebSocketServer {
       return;
     }
 
-    try {
-      _server = await HttpServer.bind(InternetAddress.anyIPv4, port);
-      _isRunning = true;
-      print('WebSocket服务器启动在端口: $port');
+    // 尝试启动WebSocket服务器，如果指定端口被占用则自动尝试其他端口
+    int currentPort = port;
+    int maxAttempts = 10; // 最多尝试10个端口
+    int attempts = 0;
 
-      _server.listen(
-        _handleHttpRequest,
-        onError: (error) {
-          print('WebSocket服务器错误: $error');
-        },
-      );
-    } catch (e) {
-      print('启动WebSocket服务器失败: $e');
-      rethrow;
+    while (attempts < maxAttempts) {
+      try {
+        _server = await HttpServer.bind(InternetAddress.anyIPv4, currentPort);
+        _currentPort = currentPort;
+        _isRunning = true;
+        print('WebSocket服务器启动在端口: $currentPort');
+        break; // 成功启动，退出循环
+      } catch (e) {
+        attempts++;
+        print('启动WebSocket服务器失败 (端口 $currentPort): $e');
+        if (attempts < maxAttempts) {
+          currentPort++; // 尝试下一个端口
+          print('尝试下一个端口: $currentPort');
+        } else {
+          print('已尝试 $maxAttempts 个端口，全部失败');
+          rethrow;
+        }
+      }
     }
+
+    _server.listen(
+      _handleHttpRequest,
+      onError: (error) {
+        print('WebSocket服务器错误: $error');
+      },
+    );
   }
 
   void _handleHttpRequest(HttpRequest request) {
@@ -92,9 +143,23 @@ class WebSocketServer {
         webSocket.listen(
           (data) {
             print('收到WebSocket数据: $data');
-            // 调用所有注册的回调函数
-            for (var callback in _onReceiveCallbacks) {
-              callback(data);
+            // 尝试解析JSON命令
+            try {
+              final jsonData = jsonDecode(data);
+              if (jsonData is Map<String, dynamic>) {
+                // 调用所有注册的命令回调函数
+                for (var callback in _onCommandCallbacks) {
+                  callback(jsonData);
+                }
+              } else {
+                print('收到的数据不是有效的JSON对象: $data');
+              }
+            } catch (e) {
+              print('解析WebSocket数据失败: $e, 数据: $data');
+              // 如果不是JSON格式，仍然尝试调用旧的回调（用于向后兼容）
+              for (var callback in _onCommandCallbacks) {
+                callback({'command': 'raw_data', 'data': {'message': data}});
+              }
             }
           },
           onError: (error) {
@@ -141,6 +206,17 @@ class WebSocketServer {
     }
   }
 
+  void broadcastJson(Map<String, dynamic> data) {
+    if (!_isRunning) {
+      print('WebSocket服务器未运行');
+      return;
+    }
+
+    // 将JSON数据转换为字符串并广播
+    String jsonString = jsonEncode(data);
+    broadcast(jsonString);
+  }
+
   void sendToClient(int clientIndex, String message) {
     if (!_isRunning) {
       print('WebSocket服务器未运行');
@@ -157,6 +233,16 @@ class WebSocketServer {
     } else {
       print('无效的客户端索引: $clientIndex');
     }
+  }
+
+  void sendJsonToClient(int clientIndex, Map<String, dynamic> data) {
+    if (!_isRunning) {
+      print('WebSocket服务器未运行');
+      return;
+    }
+
+    String jsonString = jsonEncode(data);
+    sendToClient(clientIndex, jsonString);
   }
 
   List<String> getClientList() {
@@ -195,4 +281,56 @@ class WebSocketServer {
   }
 
   bool get isRunning => _isRunning;
+
+  // 解析命令字符串为枚举
+  WebSocketCommand parseCommand(String commandStr) {
+    switch (commandStr.toLowerCase()) {
+      case 'connect':
+        return WebSocketCommand.connect;
+      case 'disconnect':
+        return WebSocketCommand.disconnect;
+      case 'list_ports':
+        return WebSocketCommand.listPorts;
+      case 'send_text':
+        return WebSocketCommand.sendText;
+      case 'send_hex':
+        return WebSocketCommand.sendHex;
+      case 'set_config':
+        return WebSocketCommand.setConfig;
+      case 'set_hex_mode':
+        return WebSocketCommand.setHexMode;
+      case 'set_chart_mode':
+        return WebSocketCommand.setChartMode;
+      default:
+        return WebSocketCommand.unknown;
+    }
+  }
+
+  // 发送响应到所有客户端
+  void sendResponse(WebSocketResponseType type, Map<String, dynamic> data) {
+    Map<String, dynamic> response = {
+      'type': _getResponseTypeString(type),
+      'data': data,
+      'timestamp': DateTime.now().toIso8601String()
+    };
+    broadcastJson(response);
+  }
+
+  // 获取响应类型字符串
+  String _getResponseTypeString(WebSocketResponseType type) {
+    switch (type) {
+      case WebSocketResponseType.commandResponse:
+        return 'command_response';
+      case WebSocketResponseType.serialData:
+        return 'serial_data';
+      case WebSocketResponseType.systemMessage:
+        return 'system_message';
+      case WebSocketResponseType.portStatus:
+        return 'port_status';
+      case WebSocketResponseType.error:
+        return 'error';
+      default:
+        return 'unknown';
+    }
+  }
 }

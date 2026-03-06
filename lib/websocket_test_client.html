@@ -1,7 +1,9 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
-    <title>UART Checker WebSocket 测试客户端</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>串口通信WebSocket测试客户端</title>
     <style>
         body {
             font-family: 'Courier New', monospace;
@@ -9,181 +11,449 @@
             color: #d4d4d4;
             margin: 0;
             padding: 20px;
+            line-height: 1.6;
         }
+        
         .container {
-            max-width: 800px;
+            max-width: 1200px;
             margin: 0 auto;
         }
-        .panel {
-            background-color: #252526;
-            border: 2px solid #569cd6;
-            border-radius: 8px;
-            padding: 15px;
-            margin-bottom: 20px;
-        }
+        
         h1 {
             color: #569cd6;
             text-align: center;
+            margin-bottom: 30px;
         }
-        input, button, textarea {
+        
+        .connection-panel {
+            background-color: #252526;
+            padding: 20px;
+            border-radius: 8px;
+            border: 2px solid #569cd6;
+            margin-bottom: 20px;
+        }
+        
+        .panel-title {
+            color: #569cd6;
+            margin: 0 0 15px 0;
+            font-size: 16px;
+            font-weight: bold;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #9cdcfe;
+        }
+        
+        input, select, button {
+            width: 100%;
+            padding: 8px 12px;
             background-color: #3c3c3c;
-            color: #d4d4d4;
             border: 1px solid #569cd6;
-            padding: 8px;
-            margin: 5px 0;
+            color: #d4d4d4;
             border-radius: 4px;
             font-family: 'Courier New', monospace;
         }
+        
         button {
-            background-color: #007acc;
+            background-color: #094771;
+            color: #ffffff;
             cursor: pointer;
-            min-width: 100px;
+            font-weight: bold;
+            margin-top: 10px;
         }
+        
         button:hover {
-            background-color: #005a9e;
+            background-color: #0067c0;
         }
-        #messages {
+        
+        button:disabled {
+            background-color: #555;
+            cursor: not-allowed;
+        }
+        
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-weight: bold;
+        }
+        
+        .status.connected {
+            background-color: #28a745;
+            color: white;
+        }
+        
+        .status.disconnected {
+            background-color: #dc3545;
+            color: white;
+        }
+        
+        .status.connecting {
+            background-color: #ffc107;
+            color: black;
+        }
+        
+        .data-panel {
+            background-color: #252526;
+            padding: 20px;
+            border-radius: 8px;
+            border: 2px solid #569cd6;
+            margin-bottom: 20px;
+        }
+        
+        .log-panel {
+            background-color: #252526;
+            padding: 20px;
+            border-radius: 8px;
+            border: 2px solid #569cd6;
             height: 300px;
             overflow-y: auto;
-            border: 1px solid #569cd6;
-            padding: 10px;
-            background-color: #1e1e1e;
             font-family: 'Courier New', monospace;
-            white-space: pre-wrap;
+            font-size: 14px;
         }
-        .status-connected {
-            color: #4ec9b0;
+        
+        .log-entry {
+            margin-bottom: 5px;
+            padding: 5px;
+            border-left: 3px solid #569cd6;
+            padding-left: 10px;
         }
-        .status-disconnected {
-            color: #ce9178;
+        
+        .log-entry.command {
+            border-left-color: #ce9178;
         }
-        .received {
-            color: #4ec9b0;
+        
+        .log-entry.response {
+            border-left-color: #4ec9b0;
         }
-        .sent {
-            color: #ce9178;
+        
+        .log-entry.error {
+            border-left-color: #f48771;
+            color: #f48771;
         }
-        .system {
-            color: #858585;
+        
+        .log-entry.system {
+            border-left-color: #9cdcfe;
+            color: #9cdcfe;
+        }
+        
+        .command-buttons {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        
+        .command-button {
+            background-color: #094771;
+            color: white;
+            border: none;
+            padding: 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .command-button:hover {
+            background-color: #0067c0;
+        }
+        
+        .command-button:disabled {
+            background-color: #555;
+            cursor: not-allowed;
+        }
+        
+        .input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        
+        .input-group input {
+            flex: 1;
+        }
+        
+        .input-group button {
+            width: auto;
+            min-width: 80px;
+        }
+        
+        .port-list {
+            height: 150px;
+            overflow-y: auto;
+            background-color: #3c3c3c;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+        
+        .port-item {
+            padding: 5px;
+            border-bottom: 1px solid #555;
+        }
+        
+        .port-item:last-child {
+            border-bottom: none;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>UART Checker WebSocket 测试客户端</h1>
+        <h1>串口通信WebSocket测试客户端</h1>
         
-        <div class="panel">
-            <h3>连接设置</h3>
-            <label>WebSocket 服务器地址: </label>
-            <input type="text" id="serverUrl" value="ws://localhost:8080" placeholder="ws://localhost:8080">
-            <br>
-            <button onclick="connectWebSocket()">连接</button>
-            <button onclick="disconnectWebSocket()">断开</button>
-            <span id="connectionStatus" class="status-disconnected">未连接</span>
+        <div class="connection-panel">
+            <h3 class="panel-title">WebSocket连接</h3>
+            
+            <div class="form-group">
+                <label for="serverUrl">服务器地址:</label>
+                <input type="text" id="serverUrl" value="ws://localhost:8080" placeholder="WebSocket服务器地址">
+            </div>
+            
+            <div class="form-group">
+                <button id="connectBtn" onclick="connectWebSocket()">连接</button>
+                <button id="disconnectBtn" onclick="disconnectWebSocket()" disabled>断开</button>
+            </div>
+            
+            <div id="connectionStatus" class="status disconnected">未连接</div>
         </div>
         
-        <div class="panel">
-            <h3>发送数据</h3>
-            <textarea id="sendData" rows="3" placeholder="输入要发送的数据..."></textarea>
-            <br>
-            <button onclick="sendData()">发送数据</button>
-            <button onclick="sendHexData()">发送HEX</button>
+        <div class="data-panel">
+            <h3 class="panel-title">串口控制命令</h3>
+            
+            <div class="command-buttons">
+                <button class="command-button" onclick="sendCommand('list_ports', {})" :disabled="!isConnected">列出串口</button>
+                <button class="command-button" onclick="sendCommand('set_hex_mode', {enabled: false})" :disabled="!isConnected">文本模式</button>
+                <button class="command-button" onclick="sendCommand('set_hex_mode', {enabled: true})" :disabled="!isConnected">HEX模式</button>
+                <button class="command-button" onclick="sendCommand('set_chart_mode', {enabled: true})" :disabled="!isConnected">开启图表</button>
+                <button class="command-button" onclick="sendCommand('set_chart_mode', {enabled: false})" :disabled="!isConnected">关闭图表</button>
+            </div>
+            
+            <div class="form-group">
+                <label for="portSelect">选择串口:</label>
+                <select id="portSelect">
+                    <option value="">请选择串口</option>
+                </select>
+            </div>
+            
+            <div class="input-group">
+                <input type="text" id="baudRate" value="9600" placeholder="波特率">
+                <button onclick="connectToPort()">连接串口</button>
+            </div>
+            
+            <div class="input-group">
+                <input type="text" id="sendText" placeholder="输入要发送的文本">
+                <button onclick="sendTextData()">发送文本</button>
+            </div>
+            
+            <div class="input-group">
+                <input type="text" id="sendHex" placeholder="输入HEX数据 (如: 48656C6C6F)">
+                <button onclick="sendHexData()">发送HEX</button>
+            </div>
+            
+            <div class="port-list" id="portList" style="display: none;">
+                <div class="panel-title">可用串口:</div>
+                <div id="portItems"></div>
+            </div>
         </div>
         
-        <div class="panel">
-            <h3>消息记录</h3>
-            <div id="messages"></div>
-            <br>
-            <button onclick="clearMessages()">清空记录</button>
+        <div class="log-panel">
+            <h3 class="panel-title">通信日志</h3>
+            <div id="log"></div>
         </div>
     </div>
 
     <script>
         let ws = null;
-        
+        let isConnected = false;
+        let availablePorts = [];
+
         function logMessage(message, type = 'system') {
-            const messagesDiv = document.getElementById('messages');
+            const logDiv = document.getElementById('log');
             const timestamp = new Date().toLocaleTimeString();
-            const messageElement = document.createElement('div');
-            messageElement.className = type;
-            messageElement.textContent = `[${timestamp}] ${message}`;
-            messagesDiv.appendChild(messageElement);
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.innerHTML = `<strong>[${timestamp}]</strong> ${message}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
         }
-        
+
+        function updateConnectionStatus(status, message) {
+            const statusDiv = document.getElementById('connectionStatus');
+            statusDiv.className = `status ${status}`;
+            statusDiv.textContent = message;
+            
+            document.getElementById('connectBtn').disabled = status === 'connected';
+            document.getElementById('disconnectBtn').disabled = status !== 'connected';
+        }
+
         function connectWebSocket() {
             const serverUrl = document.getElementById('serverUrl').value;
-            
-            if (ws) {
-                ws.close();
-            }
             
             try {
                 ws = new WebSocket(serverUrl);
                 
                 ws.onopen = function(event) {
-                    document.getElementById('connectionStatus').textContent = '已连接';
-                    document.getElementById('connectionStatus').className = 'status-connected';
-                    logMessage('WebSocket 连接已建立', 'system');
+                    isConnected = true;
+                    updateConnectionStatus('connected', '已连接到WebSocket服务器');
+                    logMessage('WebSocket连接已建立', 'system');
                 };
                 
                 ws.onmessage = function(event) {
-                    logMessage('接收: ' + event.data, 'received');
+                    try {
+                        const response = JSON.parse(event.data);
+                        logMessage(`收到响应: ${JSON.stringify(response, null, 2)}`, 'response');
+                        
+                        // 处理端口列表响应
+                        if (response.type === 'command_response' && response.data.ports) {
+                            availablePorts = response.data.ports;
+                            updatePortList();
+                        }
+                        
+                        // 处理端口状态响应
+                        if (response.type === 'port_status') {
+                            updatePortStatus(response.data);
+                        }
+                        
+                        // 处理错误响应
+                        if (response.type === 'error') {
+                            logMessage(`错误: ${response.data.error}`, 'error');
+                        }
+                    } catch (e) {
+                        logMessage(`收到数据: ${event.data}`, 'response');
+                    }
                 };
                 
                 ws.onclose = function(event) {
-                    document.getElementById('connectionStatus').textContent = '已断开';
-                    document.getElementById('connectionStatus').className = 'status-disconnected';
-                    logMessage('WebSocket 连接已断开', 'system');
+                    isConnected = false;
+                    updateConnectionStatus('disconnected', 'WebSocket连接已断开');
+                    logMessage('WebSocket连接已关闭', 'system');
                 };
                 
                 ws.onerror = function(error) {
-                    logMessage('WebSocket 错误: ' + error, 'system');
+                    logMessage(`WebSocket错误: ${error}`, 'error');
                 };
             } catch (e) {
-                logMessage('连接失败: ' + e, 'system');
+                logMessage(`连接失败: ${e}`, 'error');
             }
         }
-        
+
         function disconnectWebSocket() {
             if (ws) {
                 ws.close();
                 ws = null;
+                isConnected = false;
             }
         }
-        
-        function sendData() {
-            const data = document.getElementById('sendData').value;
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(data);
-                logMessage('发送: ' + data, 'sent');
-            } else {
-                logMessage('WebSocket 未连接', 'system');
+
+        function sendCommand(command, data) {
+            if (!isConnected || !ws) {
+                logMessage('请先连接WebSocket服务器', 'error');
+                return;
+            }
+            
+            const message = {
+                command: command,
+                data: data
+            };
+            
+            try {
+                ws.send(JSON.stringify(message));
+                logMessage(`发送命令: ${JSON.stringify(message)}`, 'command');
+            } catch (e) {
+                logMessage(`发送失败: ${e}`, 'error');
             }
         }
-        
+
+        function connectToPort() {
+            const port = document.getElementById('portSelect').value;
+            const baudRate = parseInt(document.getElementById('baudRate').value) || 9600;
+            
+            if (!port) {
+                logMessage('请选择串口', 'error');
+                return;
+            }
+            
+            sendCommand('connect', {
+                port: port,
+                baudRate: baudRate
+            });
+        }
+
+        function sendTextData() {
+            const text = document.getElementById('sendText').value;
+            if (!text) {
+                logMessage('请输入要发送的文本', 'error');
+                return;
+            }
+            
+            sendCommand('send_text', {
+                message: text
+            });
+            
+            document.getElementById('sendText').value = '';
+        }
+
         function sendHexData() {
-            const data = document.getElementById('sendData').value;
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                // 尝试将输入转换为HEX格式
-                let hexData = data;
-                if (!/^[0-9A-Fa-f\s]+$/.test(data.replace(/\s/g, ''))) {
-                    // 如果不是HEX格式，转换为HEX
-                    hexData = '';
-                    for (let i = 0; i < data.length; i++) {
-                        hexData += data.charCodeAt(i).toString(16).padStart(2, '0') + ' ';
-                    }
-                }
-                ws.send(hexData.trim());
-                logMessage('发送HEX: ' + hexData.trim(), 'sent');
+            const hex = document.getElementById('sendHex').value;
+            if (!hex) {
+                logMessage('请输入HEX数据', 'error');
+                return;
+            }
+            
+            sendCommand('send_hex', {
+                hex: hex
+            });
+            
+            document.getElementById('sendHex').value = '';
+        }
+
+        function updatePortList() {
+            const portItemsDiv = document.getElementById('portItems');
+            portItemsDiv.innerHTML = '';
+            
+            const portSelect = document.getElementById('portSelect');
+            portSelect.innerHTML = '<option value="">请选择串口</option>';
+            
+            if (availablePorts.length > 0) {
+                availablePorts.forEach(port => {
+                    const option = document.createElement('option');
+                    option.value = port;
+                    option.textContent = port;
+                    portSelect.appendChild(option);
+                    
+                    const portItem = document.createElement('div');
+                    portItem.className = 'port-item';
+                    portItem.textContent = port;
+                    portItemsDiv.appendChild(portItem);
+                });
+                
+                document.getElementById('portList').style.display = 'block';
             } else {
-                logMessage('WebSocket 未连接', 'system');
+                const noPorts = document.createElement('div');
+                noPorts.textContent = '未找到可用串口';
+                portItemsDiv.appendChild(noPorts);
             }
         }
-        
-        function clearMessages() {
-            document.getElementById('messages').innerHTML = '';
+
+        function updatePortStatus(status) {
+            const portSelect = document.getElementById('portSelect');
+            if (status.port) {
+                portSelect.value = status.port;
+            }
+            
+            document.getElementById('baudRate').value = status.baudRate || 9600;
         }
+
+        // 页面加载时自动连接到默认服务器
+        window.onload = function() {
+            logMessage('WebSocket测试客户端已加载', 'system');
+        };
     </script>
 </body>
 </html>

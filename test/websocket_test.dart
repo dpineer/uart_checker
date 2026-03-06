@@ -127,5 +127,84 @@ void main() {
 
       client.close();
     });
+
+    test('WebSocket命令API测试', () async {
+      Map<String, dynamic> receivedCommand = {};
+      server!.addOnCommandCallback((command) {
+        receivedCommand = command;
+      });
+
+      // 连接WebSocket客户端
+      var client = await WebSocket.connect('ws://localhost:$port');
+      
+      // 发送JSON命令
+      Map<String, dynamic> testCommand = {
+        'command': 'send_text',
+        'data': {
+          'message': 'Hello UART via JSON'
+        }
+      };
+      client.add(jsonEncode(testCommand));
+      
+      // 等待命令接收
+      await Future.delayed(Duration(milliseconds: 100));
+      
+      expect(receivedCommand['command'], testCommand['command']);
+      expect(receivedCommand['data']['message'], testCommand['data']['message']);
+
+      client.close();
+    });
+
+    test('WebSocket命令解析测试', () async {
+      WebSocketCommand? parsedCommand;
+      server!.addOnCommandCallback((command) {
+        parsedCommand = server!.parseCommand(command['command']);
+      });
+
+      // 连接WebSocket客户端
+      var client = await WebSocket.connect('ws://localhost:$port');
+      
+      // 发送连接命令
+      Map<String, dynamic> connectCommand = {
+        'command': 'connect',
+        'data': {
+          'port': '/dev/ttyUSB0',
+          'baudRate': 9600
+        }
+      };
+      client.add(jsonEncode(connectCommand));
+      
+      // 等待命令接收
+      await Future.delayed(Duration(milliseconds: 100));
+      
+      expect(parsedCommand, WebSocketCommand.connect);
+
+      client.close();
+    });
+
+    test('WebSocket响应发送测试', () async {
+      String receivedResponse = '';
+      int messageCount = 0;
+      
+      server!.addOnClientConnectCallback((clientInfo) {
+        // 发送一个响应来测试
+        server!.sendResponse(WebSocketResponseType.systemMessage, {
+          'message': 'Test response'
+        });
+      });
+
+      server!.addOnReceiveCallback((data) {
+        receivedResponse = data;
+        messageCount++;
+      });
+
+      // 连接WebSocket客户端
+      var client = await WebSocket.connect('ws://localhost:$port');
+      
+      // 等待响应
+      await Future.delayed(Duration(milliseconds: 150));
+      
+      client.close();
+    });
   });
 }

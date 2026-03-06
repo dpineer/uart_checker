@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_libserialport/flutter_libserialport.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'websocket_server.dart';
+import 'websocket_panel.dart';
+import 'websocket_control_page.dart';
 
 void main() {
   // 在运行应用之前，确保插件系统已初始化
@@ -49,7 +51,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 1, vsync: this);
+    _tabController = TabController(length: 2, vsync: this);
   }
   
   @override
@@ -80,6 +82,11 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                 selectedIcon: Icon(Icons.settings_input_component, color: Color(0xFF569CD6)),
                 label: Text('串口通信', style: TextStyle(color: Color(0xFF858585))),
               ),
+              NavigationRailDestination(
+                icon: Icon(Icons.network_wifi, color: Color(0xFF858585)),
+                selectedIcon: Icon(Icons.network_wifi, color: Color(0xFF569CD6)),
+                label: Text('WebSocket控制', style: TextStyle(color: Color(0xFF858585))),
+              ),
             ],
           ),
           VerticalDivider(thickness: 1, width: 1),
@@ -88,6 +95,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
               index: _selectedIndex,
               children: [
                 SerialPortHomePage(),
+                WebSocketControlPage(),
               ],
             ),
           ),
@@ -98,6 +106,11 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
 }
 
 class SerialPortHomePage extends StatefulWidget {
+  static _SerialPortHomePageState? of(BuildContext context) {
+    final serialPortHomePageState = context.findAncestorStateOfType<_SerialPortHomePageState>();
+    return serialPortHomePageState;
+  }
+
   @override
   _SerialPortHomePageState createState() => _SerialPortHomePageState();
 }
@@ -168,6 +181,9 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
 
   // WebSocket服务器相关变量
   WebSocketServer? _webSocketServer;
+  
+  // 公共getter方法
+  WebSocketServer? get webSocketServer => _webSocketServer;
   bool _isWebSocketServerRunning = false;
   int _webSocketPort = WebSocketServer.DEFAULT_PORT;
 
@@ -198,7 +214,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   // 初始化WebSocket服务器
   void _initWebSocketServer() async {
     _webSocketServer = WebSocketServer();
-    _webSocketServer!.addOnReceiveCallback(_handleWebSocketDataReceived);
+    _webSocketServer!.addOnCommandCallback(_handleWebSocketCommandReceived);
     _webSocketServer!.addOnClientConnectCallback(_handleWebSocketClientConnect);
     _webSocketServer!.addOnClientDisconnectCallback(_handleWebSocketClientDisconnect);
     
@@ -220,9 +236,207 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
     }
   }
 
-  // 处理WebSocket接收到的数据
-  void _handleWebSocketDataReceived(String data) {
-    _addLine("WebSocket接收: $data", LineType.receive);
+  // 处理WebSocket接收到的数据（新API - 处理JSON命令）
+  void _handleWebSocketCommandReceived(Map<String, dynamic> command) {
+    String cmd = command['command'] ?? '';
+    Map<String, dynamic> data = command['data'] ?? {};
+    
+    _addLine("WebSocket命令: $cmd", LineType.system);
+    
+    // 根据命令类型执行相应操作
+    switch (_webSocketServer!.parseCommand(cmd)) {
+      case WebSocketCommand.connect:
+        _handleWebSocketConnectCommand(data);
+        break;
+      case WebSocketCommand.disconnect:
+        _handleWebSocketDisconnectCommand(data);
+        break;
+      case WebSocketCommand.listPorts:
+        _handleWebSocketListPortsCommand(data);
+        break;
+      case WebSocketCommand.sendText:
+        _handleWebSocketSendTextCommand(data);
+        break;
+      case WebSocketCommand.sendHex:
+        _handleWebSocketSendHexCommand(data);
+        break;
+      case WebSocketCommand.setConfig:
+        _handleWebSocketSetConfigCommand(data);
+        break;
+      case WebSocketCommand.setHexMode:
+        _handleWebSocketSetHexModeCommand(data);
+        break;
+      case WebSocketCommand.setChartMode:
+        _handleWebSocketSetChartModeCommand(data);
+        break;
+      case WebSocketCommand.unknown:
+        // 如果是原始数据，按旧方式处理
+        if (cmd == 'raw_data') {
+          String message = data['message'] ?? '';
+          _handleWebSocketRawDataReceived(message);
+        } else {
+          _webSocketServer!.sendResponse(WebSocketResponseType.error, {
+            'command': cmd,
+            'error': '未知命令',
+            'code': 4001
+          });
+        }
+        break;
+    }
+  }
+
+  // 处理连接命令
+  void _handleWebSocketConnectCommand(Map<String, dynamic> data) {
+    String port = data['port'] ?? '';
+    int baudRate = data['baudRate'] ?? 9600;
+    int dataBits = data['dataBits'] ?? 8;
+    int stopBits = data['stopBits'] ?? 1;
+    String parity = data['parity'] ?? 'none';
+
+    if (port.isEmpty) {
+      _webSocketServer!.sendResponse(WebSocketResponseType.error, {
+        'command': 'connect',
+        'error': '串口未指定',
+        'code': 4002
+      });
+      return;
+    }
+
+    // 更新UI状态
+    setState(() {
+      selectedPort = port;
+      selectedBaudRate = baudRate.toString();
+      selectedDataBits = dataBits.toString();
+      selectedStopBits = stopBits.toString();
+      selectedParity = _convertParityToString(parity);
+    });
+
+    // 尝试连接串口
+    _connect(manual: true);
+
+    // 发送响应
+    _webSocketServer!.sendResponse(WebSocketResponseType.commandResponse, {
+      'command': 'connect',
+      'success': isConnected,
+      'message': isConnected ? '串口连接成功' : '串口连接失败',
+      'port': port,
+      'baudRate': baudRate
+    });
+
+    // 发送端口状态
+    _sendPortStatus();
+  }
+
+  // 处理断开连接命令
+  void _handleWebSocketDisconnectCommand(Map<String, dynamic> data) {
+    _disconnect();
+
+    _webSocketServer!.sendResponse(WebSocketResponseType.commandResponse, {
+      'command': 'disconnect',
+      'success': true,
+      'message': '串口已断开'
+    });
+
+    _sendPortStatus();
+  }
+
+  // 处理列出端口命令
+  void _handleWebSocketListPortsCommand(Map<String, dynamic> data) {
+    _refreshPortList();
+    _webSocketServer!.sendResponse(WebSocketResponseType.commandResponse, {
+      'command': 'list_ports',
+      'success': true,
+      'ports': availablePorts
+    });
+  }
+
+  // 处理发送文本命令
+  void _handleWebSocketSendTextCommand(Map<String, dynamic> data) {
+    String message = data['message'] ?? '';
+    _sendTextData(message);
+  }
+
+  // 处理发送HEX命令
+  void _handleWebSocketSendHexCommand(Map<String, dynamic> data) {
+    String hex = data['hex'] ?? '';
+    _sendHexData(hex);
+  }
+
+  // 处理设置配置命令
+  void _handleWebSocketSetConfigCommand(Map<String, dynamic> data) {
+    if (data.containsKey('baudRate')) {
+      setState(() {
+        selectedBaudRate = data['baudRate'].toString();
+      });
+    }
+    if (data.containsKey('dataBits')) {
+      setState(() {
+        selectedDataBits = data['dataBits'].toString();
+      });
+    }
+    if (data.containsKey('stopBits')) {
+      setState(() {
+        selectedStopBits = data['stopBits'].toString();
+      });
+    }
+    if (data.containsKey('parity')) {
+      setState(() {
+        selectedParity = _convertParityToString(data['parity']);
+      });
+    }
+
+    // 如果串口已连接，重新连接以应用新配置
+    if (isConnected) {
+      _addLine("配置变更，正在重启串口...", LineType.system);
+      _handleDisconnect(); // 触发自动重连逻辑
+    }
+
+    _webSocketServer!.sendResponse(WebSocketResponseType.commandResponse, {
+      'command': 'set_config',
+      'success': true,
+      'message': '配置已更新',
+      'config': {
+        'baudRate': selectedBaudRate,
+        'dataBits': selectedDataBits,
+        'stopBits': selectedStopBits,
+        'parity': selectedParity
+      }
+    });
+  }
+
+  // 处理设置HEX模式命令
+  void _handleWebSocketSetHexModeCommand(Map<String, dynamic> data) {
+    bool enabled = data['enabled'] ?? false;
+    setState(() {
+      hexMode = enabled;
+    });
+
+    _webSocketServer!.sendResponse(WebSocketResponseType.commandResponse, {
+      'command': 'set_hex_mode',
+      'success': true,
+      'enabled': enabled,
+      'message': 'HEX模式已${enabled ? '启用' : '禁用'}'
+    });
+  }
+
+  // 处理设置图表模式命令
+  void _handleWebSocketSetChartModeCommand(Map<String, dynamic> data) {
+    bool enabled = data['enabled'] ?? false;
+    setState(() {
+      chartMode = enabled;
+    });
+
+    _webSocketServer!.sendResponse(WebSocketResponseType.commandResponse, {
+      'command': 'set_chart_mode',
+      'success': true,
+      'enabled': enabled,
+      'message': '图表模式已${enabled ? '启用' : '禁用'}'
+    });
+  }
+
+  // 处理原始数据（向后兼容）
+  void _handleWebSocketRawDataReceived(String data) {
+    _addLine("WebSocket接收: $data", LineType.system);
     
     // 如果串口已连接，将WebSocket数据转发到串口
     if (isConnected && _serialPort != null) {
@@ -246,6 +460,133 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
       } catch (e) {
         _addLine("转发WebSocket数据到串口失败: $e", LineType.system);
       }
+    }
+  }
+
+  // 发送串口状态
+  void _sendPortStatus() {
+    _webSocketServer!.sendResponse(WebSocketResponseType.portStatus, {
+      'connected': isConnected,
+      'port': selectedPort,
+      'baudRate': int.tryParse(selectedBaudRate) ?? 9600,
+      'hexMode': hexMode,
+      'chartMode': chartMode
+    });
+  }
+
+  // 发送文本数据
+  void _sendTextData(String message) {
+    if (!isConnected || _serialPort == null) {
+      _webSocketServer!.sendResponse(WebSocketResponseType.error, {
+        'command': 'send_text',
+        'error': '串口未连接',
+        'code': 4003
+      });
+      return;
+    }
+
+    try {
+      Uint8List dataToSend = Uint8List.fromList(utf8.encode(message + '\r\n'));
+      final bytesWritten = _serialPort!.write(dataToSend);
+
+      if (bytesWritten == dataToSend.length) {
+        _addLine(message, LineType.send);
+        _webSocketServer!.sendResponse(WebSocketResponseType.commandResponse, {
+          'command': 'send_text',
+          'success': true,
+          'message': '数据发送成功',
+          'bytesWritten': bytesWritten
+        });
+      } else {
+        _webSocketServer!.sendResponse(WebSocketResponseType.error, {
+          'command': 'send_text',
+          'error': '数据发送不完整',
+          'code': 4004
+        });
+      }
+    } catch (e) {
+      _webSocketServer!.sendResponse(WebSocketResponseType.error, {
+        'command': 'send_text',
+        'error': '发送失败: $e',
+        'code': 4005
+      });
+    }
+  }
+
+  // 发送HEX数据
+  void _sendHexData(String hexString) {
+    if (!isConnected || _serialPort == null) {
+      _webSocketServer!.sendResponse(WebSocketResponseType.error, {
+        'command': 'send_hex',
+        'error': '串口未连接',
+        'code': 4003
+      });
+      return;
+    }
+
+    try {
+      final cleanedData = hexString.replaceAll(RegExp(r'[^0-9A-Fa-f]'), '');
+      if (cleanedData.isEmpty) {
+        _webSocketServer!.sendResponse(WebSocketResponseType.error, {
+          'command': 'send_hex',
+          'error': '无效的HEX数据',
+          'code': 4006
+        });
+        return;
+      }
+
+      final dataList = <int>[];
+      for (int i = 0; i < cleanedData.length; i += 2) {
+        final hexByte = cleanedData.substring(i, math.min(i + 2, cleanedData.length));
+        dataList.add(int.parse(hexByte, radix: 16));
+      }
+      Uint8List dataToSend = Uint8List.fromList(dataList);
+
+      final bytesWritten = _serialPort!.write(dataToSend);
+
+      if (bytesWritten == dataToSend.length) {
+        String displayHex = cleanedData
+            .replaceAllMapped(RegExp(r'.{2}'), (match) => '${match.group(0)} ')
+            .trim();
+        _addLine('HEX: $displayHex', LineType.send);
+        _webSocketServer!.sendResponse(WebSocketResponseType.commandResponse, {
+          'command': 'send_hex',
+          'success': true,
+          'message': 'HEX数据发送成功',
+          'bytesWritten': bytesWritten,
+          'hex': displayHex
+        });
+      } else {
+        _webSocketServer!.sendResponse(WebSocketResponseType.error, {
+          'command': 'send_hex',
+          'error': 'HEX数据发送不完整',
+          'code': 4004
+        });
+      }
+    } catch (e) {
+      _webSocketServer!.sendResponse(WebSocketResponseType.error, {
+        'command': 'send_hex',
+        'error': 'HEX发送失败: $e',
+        'code': 4005
+      });
+    }
+  }
+
+  // 将奇偶校验值转换为字符串
+  String _convertParityToString(dynamic parity) {
+    if (parity is int) {
+      switch (parity) {
+        case 0: return '无校验';
+        case 1: return '奇校验';
+        case 2: return '偶校验';
+        case 3: return '标记';
+        case 4: return '空格';
+        default: return '无校验';
+      }
+    } else if (parity is String) {
+      return parity;
+    } else {
+      return '无校验';
     }
   }
 
@@ -294,11 +635,8 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_receiveScrollController.hasClients) {
-        _receiveScrollController.animateTo(
-          _receiveScrollController.position.maxScrollExtent,
-          duration: Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-        );
+        // 使用jumpTo而不是animateTo来避免动画导致的视觉问题
+        _receiveScrollController.jumpTo(_receiveScrollController.position.maxScrollExtent);
       }
     });
   }
@@ -820,7 +1158,10 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
       final bytesWritten = _serialPort!.write(dataToSend);
 
       if (bytesWritten == dataToSend.length) {
-        _addLine(inputData, LineType.send);
+        // 发送数据时，同时添加到增强数据行列表以确保一致的显示
+        List<DataSegment> segments = _splitTextAndHex(inputData);
+        _addEnhancedLine(segments, LineType.send);
+        _sendToWebSocket(inputData); // 将发送的数据也广播到WebSocket客户端
         setState(() {
           inputData = '';
         });

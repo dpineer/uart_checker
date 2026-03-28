@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io'; // <-- 新增，用于调用外部进程(esptool)
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -51,7 +52,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    // 修改为3个页面
+    _tabController = TabController(length: 3, vsync: this);
   }
   
   @override
@@ -87,6 +89,12 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                 selectedIcon: Icon(Icons.network_wifi, color: Color(0xFF569CD6)),
                 label: Text('WebSocket控制', style: TextStyle(color: Color(0xFF858585))),
               ),
+              // ====== 新增：固件烧录侧边栏导航 ======
+              NavigationRailDestination(
+                icon: Icon(Icons.memory, color: Color(0xFF858585)),
+                selectedIcon: Icon(Icons.memory, color: Color(0xFF569CD6)),
+                label: Text('固件烧录', style: TextStyle(color: Color(0xFF858585))),
+              ),
             ],
           ),
           VerticalDivider(thickness: 1, width: 1),
@@ -96,6 +104,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
               children: [
                 SerialPortHomePage(),
                 WebSocketControlPage(),
+                // ====== 新增：固件烧录页面视图 ======
+                FirmwareFlashPage(), 
               ],
             ),
           ),
@@ -2023,5 +2033,573 @@ class DataLine {
     } else {
       return text;
     }
+  }
+}
+
+// ==========================================
+// 固件烧录页面 (基于 esptool v5.2.0)
+// ==========================================
+class FirmwareFlashPage extends StatefulWidget {
+  @override
+  _FirmwareFlashPageState createState() => _FirmwareFlashPageState();
+}
+
+class _FirmwareFlashPageState extends State<FirmwareFlashPage> {
+  // 主题颜色（与主界面保持一致）
+  static const Color vsCodeBackground = Color(0xFF1E1E1E);
+  static const Color vsCodeSurface = Color(0xFF252526);
+  static const Color vsCodeBlue = Color(0xFF569CD6);
+  static const Color vsCodeText = Color(0xFFD4D4D4);
+  static const Color vsCodeTextSecondary = Color(0xFF858585);
+  static const Color successColor = Color(0xFF4EC9B0);
+  static const Color errorColor = Color(0xFFF48771);
+
+  // 默认配置（直接填入你需要烧录的路径和参数）
+  String _esptoolPath = './esptool';
+  String _chip = 'esp32c3';
+  String _port = '';
+  bool _encrypt = true;
+  
+  List<String> _availablePorts =[];
+
+  final TextEditingController _bootloaderPathCtrl = TextEditingController(text: '/mnt/source_disk/Project/MyPrj/A-Company/IR_Channel/erc/espnow/firmware_release/bootloader.bin');
+  final TextEditingController _partitionPathCtrl = TextEditingController(text: '/mnt/source_disk/Project/MyPrj/A-Company/IR_Channel/erc/espnow/firmware_release/partition-table.bin');
+  final TextEditingController _appPathCtrl = TextEditingController(text: '/mnt/source_disk/Project/MyPrj/A-Company/IR_Channel/erc/espnow/firmware_release/espnow.bin');
+
+  final TextEditingController _bootloaderAddrCtrl = TextEditingController(text: '0x0');
+  final TextEditingController _partitionAddrCtrl = TextEditingController(text: '0xC000');
+  final TextEditingController _appAddrCtrl = TextEditingController(text: '0x20000');
+
+  final List<String> _outputLog =[];
+  final ScrollController _scrollController = ScrollController();
+  
+  bool _isFlashing = false;
+  Process? _flashProcess;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshPorts();
+    _appendLog('等待就绪...');
+    _appendLog('默认适配: esptool v5.2.0 命令行工具');
+  }
+
+  @override
+  void dispose() {
+    _flashProcess?.kill();
+    _scrollController.dispose();
+    _bootloaderPathCtrl.dispose();
+    _partitionPathCtrl.dispose();
+    _appPathCtrl.dispose();
+    _bootloaderAddrCtrl.dispose();
+    _partitionAddrCtrl.dispose();
+    _appAddrCtrl.dispose();
+    super.dispose();
+  }
+
+  void _refreshPorts() {
+    setState(() {
+      _availablePorts = SerialPort.availablePorts;
+      if (_availablePorts.isNotEmpty && (_port.isEmpty || !_availablePorts.contains(_port))) {
+        _port = _availablePorts.first;
+      }
+    });
+  }
+
+  void _appendLog(String text, {bool isError = false}) {
+    setState(() {
+      final prefix = isError ? '[ERROR] ' : '';
+      _outputLog.add('$prefix$text');
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+      }
+    });
+  }
+
+  // ==================== 修改：附带校验与自动下载逻辑的烧录进程 ====================
+  Future<void> _startFlashing() async {
+    setState(() {
+      _isFlashing = true;
+      _outputLog.clear();
+    });
+
+    // 1. 检查 esptool 二进制文件是否存在，若缺失则触发下载
+    File esptoolFile = File(_esptoolPath);
+    if (!await esptoolFile.exists()) {
+      _appendLog('未能在[$_esptoolPath] 找到 esptool 执行文件。', isError: true);
+      _appendLog('正在尝试自动下载并配置对应的 esptool 工具链...');
+      
+      bool success = await _downloadEsptool();
+      if (!success) {
+        _appendLog('工具链自动配置失败，请检查网络或手动下载并指定路径。', isError: true);
+        setState(() {
+          _isFlashing = false;
+        });
+        return;
+      }
+    } else {
+      // 若存在则确保 Linux 环境下具备可执行权限
+      if (Platform.isLinux || Platform.isMacOS) {
+        await Process.run('chmod',['+x', _esptoolPath]);
+      }
+    }
+
+    if (_port.isEmpty) {
+      _appendLog('错误: 请先选择串口 (例如: /dev/ttyACM0)', isError: true);
+      setState(() {
+        _isFlashing = false;
+      });
+      return;
+    }
+
+    // 2. 拼装命令参数
+    List<String> args = [
+      '--chip', _chip,
+      '--port', _port,
+      'write-flash'
+    ];
+    
+    if (_encrypt) {
+      args.add('--encrypt');
+    }
+    
+    if (_bootloaderPathCtrl.text.isNotEmpty) {
+      args.addAll([_bootloaderAddrCtrl.text, _bootloaderPathCtrl.text]);
+    }
+    if (_partitionPathCtrl.text.isNotEmpty) {
+      args.addAll([_partitionAddrCtrl.text, _partitionPathCtrl.text]);
+    }
+    if (_appPathCtrl.text.isNotEmpty) {
+      args.addAll([_appAddrCtrl.text, _appPathCtrl.text]);
+    }
+
+    _appendLog('执行命令: $_esptoolPath ${args.join(' ')}');
+    _appendLog('----------------------------------------------------');
+
+    try {
+      _flashProcess = await Process.start(_esptoolPath, args);
+
+      _flashProcess!.stdout.transform(utf8.decoder).listen((data) {
+        final lines = data.split(RegExp(r'[\r\n]+'));
+        for (var line in lines) {
+          if (line.trim().isNotEmpty) _appendLog(line.trim());
+        }
+      });
+
+      _flashProcess!.stderr.transform(utf8.decoder).listen((data) {
+        final lines = data.split(RegExp(r'[\r\n]+'));
+        for (var line in lines) {
+          if (line.trim().isNotEmpty) _appendLog(line.trim(), isError: true);
+        }
+      });
+
+      int exitCode = await _flashProcess!.exitCode;
+      _appendLog('----------------------------------------------------');
+      if (exitCode == 0) {
+        _appendLog('烧录成功完成！', isError: false);
+      } else {
+        _appendLog('烧录失败，退出代码: $exitCode', isError: true);
+      }
+    } catch (e) {
+      _appendLog('启动进程失败: $e', isError: true);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isFlashing = false;
+          _flashProcess = null;
+        });
+      }
+    }
+  }
+
+  // ==================== 新增：自动下载和配置工具链 ====================
+  Future<bool> _downloadEsptool() async {
+    // 默认获取适配 Linux 的 amd64 预编译版本
+    String version = 'v5.2.0';
+    String fileName = 'esptool-$version-linux-amd64.tar.gz';
+    String url = 'https://github.com/espressif/esptool/releases/download/$version/$fileName';
+    String saveDir = '${Directory.current.path}/tools';
+
+    try {
+      Directory(saveDir).createSync(recursive: true);
+      String savePath = '$saveDir/$fileName';
+
+      _appendLog('开始下载 esptool $version ...');
+      _appendLog('目标路径: $savePath');
+
+      var httpClient = HttpClient();
+      var request = await httpClient.getUrl(Uri.parse(url));
+      var response = await request.close();
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        var file = File(savePath);
+        var sink = file.openWrite();
+
+        int downloaded = 0;
+        int contentLength = response.contentLength;
+        int lastReportedProgress = -1;
+
+        await response.listen((List<int> chunk) {
+          sink.add(chunk);
+          downloaded += chunk.length;
+          if (contentLength > 0) {
+            int progress = (downloaded * 100 / contentLength).round();
+            // 每隔 10% 汇报一次进度
+            if (progress % 10 == 0 && progress != lastReportedProgress) {
+              _appendLog('下载进度: $progress%');
+              lastReportedProgress = progress;
+            }
+          }
+        }).asFuture();
+
+        await sink.close();
+        _appendLog('下载完成，正在解压...');
+
+        // 调用 Linux 原生 tar 命令解压
+        var result = await Process.run('tar', ['-xzf', savePath, '-C', saveDir]);
+        if (result.exitCode != 0) {
+          _appendLog('解压失败: ${result.stderr}', isError: true);
+          return false;
+        }
+
+        await file.delete(); // 删除临时压缩包
+
+        // 验证解压后的二进制文件路径
+        String extractedBinaryPath = '$saveDir/esptool-$version-linux-amd64/esptool';
+        if (!await File(extractedBinaryPath).exists()) {
+          // 容错路径查找
+          if (await File('$saveDir/esptool').exists()) {
+            extractedBinaryPath = '$saveDir/esptool';
+          } else {
+            _appendLog('解压后未能在预期路径找到 esptool 可执行文件', isError: true);
+            return false;
+          }
+        }
+
+        // 赋予可执行权限
+        await Process.run('chmod', ['+x', extractedBinaryPath]);
+
+        // 更新 UI 上的路径指向
+        setState(() {
+          _esptoolPath = extractedBinaryPath;
+        });
+
+        _appendLog('esptool 工具链准备完毕！');
+        return true;
+      } else {
+        _appendLog('下载失败，HTTP 状态码: ${response.statusCode}', isError: true);
+        return false;
+      }
+    } catch (e) {
+      _appendLog('下载或配置异常: $e', isError: true);
+      return false;
+    }
+  }
+
+  void _stopFlashing() {
+    if (_flashProcess != null) {
+      _flashProcess!.kill();
+      _appendLog('操作已被用户手动中止。', isError: true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('ESP32 固件烧录面板', style: TextStyle(color: vsCodeBlue)),
+        backgroundColor: vsCodeBackground,
+        elevation: 0,
+      ),
+      body: Container(
+        color: vsCodeBackground,
+        padding: EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ========== 配置区域 ==========
+            Container(
+              padding: EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                border: Border.all(color: vsCodeBlue.withOpacity(0.5), width: 1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        flex: 2,
+                        child: _buildTextField('esptool 路径', (val) => _esptoolPath = val, _esptoolPath),
+                      ),
+                      SizedBox(width: 16),
+                      Expanded(
+                        flex: 1,
+                        child: _buildTextField('芯片 (--chip)', (val) => _chip = val, _chip),
+                      ),
+                      SizedBox(width: 16),
+                      Expanded(
+                        flex: 2,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('串口号 (--port)', style: TextStyle(color: vsCodeBlue, fontSize: 12, fontWeight: FontWeight.bold)),
+                            SizedBox(height: 6),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Container(
+                                    height: 36,
+                                    padding: EdgeInsets.symmetric(horizontal: 8),
+                                    decoration: BoxDecoration(
+                                      border: Border.all(color: vsCodeTextSecondary.withOpacity(0.5)),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: DropdownButtonHideUnderline(
+                                      child: DropdownButton<String>(
+                                        value: _port.isNotEmpty && _availablePorts.contains(_port) ? _port : null,
+                                        isExpanded: true,
+                                        dropdownColor: vsCodeSurface,
+                                        style: TextStyle(color: vsCodeText, fontSize: 13),
+                                        items: _availablePorts.map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+                                        onChanged: (val) {
+                                          setState(() => _port = val!);
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                IconButton(
+                                  icon: Icon(Icons.refresh, color: vsCodeBlue, size: 20),
+                                  onPressed: _refreshPorts,
+                                  tooltip: '刷新系统设备列表',
+                                )
+                              ],
+                            )
+                          ],
+                        ),
+                      ),
+                      SizedBox(width: 16),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('附加选项', style: TextStyle(color: vsCodeBlue, fontSize: 12, fontWeight: FontWeight.bold)),
+                          SizedBox(height: 6),
+                          Row(
+                            children: [
+                              Checkbox(
+                                value: _encrypt,
+                                activeColor: vsCodeBlue,
+                                onChanged: (val) => setState(() => _encrypt = val!),
+                              ),
+                              Text('加密 (--encrypt)', style: TextStyle(color: vsCodeText, fontSize: 13)),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: 16),
+                  Divider(color: vsCodeTextSecondary.withOpacity(0.3)),
+                  SizedBox(height: 8),
+                  _buildFileRow('Bootloader', _bootloaderAddrCtrl, _bootloaderPathCtrl),
+                  SizedBox(height: 12),
+                  _buildFileRow('Partition Table', _partitionAddrCtrl, _partitionPathCtrl),
+                  SizedBox(height: 12),
+                  _buildFileRow('ESP-NOW App', _appAddrCtrl, _appPathCtrl),
+                ],
+              ),
+            ),
+            SizedBox(height: 16),
+            // ========== 按钮区域 ==========
+            Row(
+              children: [
+                ElevatedButton.icon(
+                  icon: Icon(_isFlashing ? Icons.stop : Icons.flash_on, size: 18),
+                  label: Text(_isFlashing ? '终止烧录' : '执行烧录 (Write Flash)'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _isFlashing ? Colors.red : Colors.green,
+                    foregroundColor: Colors.white,
+                    padding: EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                  ),
+                  onPressed: _isFlashing ? _stopFlashing : _startFlashing,
+                ),
+                SizedBox(width: 16),
+                ElevatedButton.icon(
+                  icon: Icon(Icons.delete_outline, size: 18),
+                  label: Text('清空终端'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: vsCodeSurface,
+                    foregroundColor: vsCodeText,
+                    side: BorderSide(color: vsCodeTextSecondary.withOpacity(0.5)),
+                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      _outputLog.clear();
+                    });
+                  },
+                ),
+              ],
+            ),
+            SizedBox(height: 16),
+            // ========== 日志控制台 ==========
+            Expanded(
+              child: Container(
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  border: Border.all(color: vsCodeBlue, width: 2),
+                  borderRadius: BorderRadius.circular(8),
+                  color: Colors.black, // 控制台深色背景
+                ),
+                child: Column(
+                  children: [
+                    Container(
+                      width: double.infinity,
+                      padding: EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: vsCodeBlue.withOpacity(0.1),
+                        borderRadius: BorderRadius.only(
+                          topLeft: Radius.circular(6),
+                          topRight: Radius.circular(6),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.terminal, color: vsCodeBlue, size: 16),
+                          SizedBox(width: 8),
+                          Text(
+                            '标准输出终端 (esptool process)',
+                            style: TextStyle(color: vsCodeBlue, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: Scrollbar(
+                        controller: _scrollController,
+                        thumbVisibility: true,
+                        child: ListView.builder(
+                          controller: _scrollController,
+                          padding: EdgeInsets.all(12),
+                          itemCount: _outputLog.length,
+                          itemBuilder: (context, index) {
+                            String log = _outputLog[index];
+                            Color textColor = vsCodeText;
+                            
+                            // 简单基于正则上色
+                            if (log.startsWith('[ERROR]') || log.contains('failed') || log.contains('Error')) {
+                              textColor = errorColor;
+                            } else if (log.contains('成功') || log.contains('Done') || log.contains('Leaving...') || log.contains('Wrote')) {
+                              textColor = successColor;
+                            } else if (log.contains('esptool.py v5.2')) {
+                              textColor = vsCodeBlue;
+                            }
+                            
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 4.0),
+                              child: SelectableText(
+                                log,
+                                style: TextStyle(
+                                  fontFamily: 'monospace',
+                                  fontSize: 13,
+                                  color: textColor,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // 内部小组件
+  Widget _buildTextField(String label, Function(String) onChanged, String initValue) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: TextStyle(color: vsCodeBlue, fontSize: 12, fontWeight: FontWeight.bold)),
+        SizedBox(height: 6),
+        SizedBox(
+          height: 36,
+          child: TextFormField(
+            // 绑定 ValueKey，确保当下载完成后外部变量更新时组件会重绘
+            key: ValueKey(initValue),
+            initialValue: initValue,
+            onChanged: onChanged,
+            style: TextStyle(color: vsCodeText, fontSize: 13),
+            decoration: InputDecoration(
+              isDense: true,
+              contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              border: OutlineInputBorder(borderSide: BorderSide(color: vsCodeTextSecondary.withOpacity(0.5))),
+              enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: vsCodeTextSecondary.withOpacity(0.5))),
+              focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: vsCodeBlue)),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFileRow(String label, TextEditingController addrCtrl, TextEditingController pathCtrl) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 130,
+          child: Text(label, style: TextStyle(color: vsCodeText, fontSize: 13, fontWeight: FontWeight.bold)),
+        ),
+        SizedBox(
+          width: 100,
+          child: SizedBox(
+            height: 36,
+            child: TextField(
+              controller: addrCtrl,
+              style: TextStyle(color: successColor, fontFamily: 'monospace', fontSize: 13),
+              decoration: InputDecoration(
+                isDense: true,
+                contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                labelText: '起始地址',
+                labelStyle: TextStyle(color: vsCodeTextSecondary, fontSize: 12),
+                border: OutlineInputBorder(borderSide: BorderSide(color: vsCodeTextSecondary.withOpacity(0.5))),
+                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: vsCodeTextSecondary.withOpacity(0.5))),
+                focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: vsCodeBlue)),
+              ),
+            ),
+          ),
+        ),
+        SizedBox(width: 16),
+        Expanded(
+          child: SizedBox(
+            height: 36,
+            child: TextField(
+              controller: pathCtrl,
+              style: TextStyle(color: vsCodeText, fontSize: 13),
+              decoration: InputDecoration(
+                isDense: true,
+                contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                labelText: '文件绝对路径 (.bin)',
+                labelStyle: TextStyle(color: vsCodeTextSecondary, fontSize: 12),
+                border: OutlineInputBorder(borderSide: BorderSide(color: vsCodeTextSecondary.withOpacity(0.5))),
+                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: vsCodeTextSecondary.withOpacity(0.5))),
+                focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: vsCodeBlue)),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
   }
 }

@@ -2147,7 +2147,7 @@ class _FirmwareFlashPageState extends State<FirmwareFlashPage> {
     }
 
     if (_port.isEmpty) {
-      _appendLog('错误: 请先选择串口 (例如: /dev/ttyACM0)', isError: true);
+      _appendLog('错误: 请先选择串口', isError: true);
       setState(() {
         _isFlashing = false;
       });

@@ -10,7 +10,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  flutter_libserialport: ^0.2.3
+  flutter_libserialport: ^0.6.0
   selectable: ^0.5.2
   fl_chart: ^1.1.1
   cupertino_icons: ^1.0.8

@@ -2062,9 +2062,9 @@ class _FirmwareFlashPageState extends State<FirmwareFlashPage> {
   
   List<String> _availablePorts =[];
 
-  final TextEditingController _bootloaderPathCtrl = TextEditingController(text: '/mnt/source_disk/Project/MyPrj/A-Company/IR_Channel/erc/espnow/firmware_release/bootloader.bin');
-  final TextEditingController _partitionPathCtrl = TextEditingController(text: '/mnt/source_disk/Project/MyPrj/A-Company/IR_Channel/erc/espnow/firmware_release/partition-table.bin');
-  final TextEditingController _appPathCtrl = TextEditingController(text: '/mnt/source_disk/Project/MyPrj/A-Company/IR_Channel/erc/espnow/firmware_release/espnow.bin');
+  final TextEditingController _bootloaderPathCtrl = TextEditingController(text: '');
+  final TextEditingController _partitionPathCtrl = TextEditingController(text: '');
+  final TextEditingController _appPathCtrl = TextEditingController(text: '');
 
   final TextEditingController _bootloaderAddrCtrl = TextEditingController(text: '0x0');
   final TextEditingController _partitionAddrCtrl = TextEditingController(text: '0xC000');
@@ -2214,13 +2214,29 @@ class _FirmwareFlashPageState extends State<FirmwareFlashPage> {
     }
   }
 
-  // ==================== 新增：自动下载和配置工具链 ====================
+  // ==================== 新增：自动下载和配置工具链（跨平台支持） ====================
   Future<bool> _downloadEsptool() async {
-    // 默认获取适配 Linux 的 amd64 预编译版本
     String version = 'v5.2.0';
-    String fileName = 'esptool-$version-linux-amd64.tar.gz';
-    String url = 'https://github.com/espressif/esptool/releases/download/$version/$fileName';
+    String fileName = '';
+    String url = '';
     String saveDir = '${Directory.current.path}/tools';
+
+    // 根据操作系统选择对应的文件
+    if (Platform.isWindows) {
+      fileName = 'esptool-$version-windows-amd64.zip';
+      _appendLog('检测到 Windows 系统，下载 Windows 版本...');
+    } else if (Platform.isLinux) {
+      fileName = 'esptool-$version-linux-amd64.tar.gz';
+      _appendLog('检测到 Linux 系统，下载 Linux 版本...');
+    } else if (Platform.isMacOS) {
+      fileName = 'esptool-$version-macos-universal.tar.gz';
+      _appendLog('检测到 macOS 系统，下载 macOS 版本...');
+    } else {
+      _appendLog('不支持的操作系统，请手动下载 esptool', isError: true);
+      return false;
+    }
+
+    url = 'https://github.com/espressif/esptool/releases/download/$version/$fileName';
 
     try {
       Directory(saveDir).createSync(recursive: true);
@@ -2257,36 +2273,77 @@ class _FirmwareFlashPageState extends State<FirmwareFlashPage> {
         await sink.close();
         _appendLog('下载完成，正在解压...');
 
-        // 调用 Linux 原生 tar 命令解压
-        var result = await Process.run('tar', ['-xzf', savePath, '-C', saveDir]);
-        if (result.exitCode != 0) {
-          _appendLog('解压失败: ${result.stderr}', isError: true);
+        // 根据操作系统使用不同的解压方式
+        bool extractSuccess = false;
+        if (Platform.isWindows) {
+          // Windows 使用 zip 解压
+          try {
+            // 尝试使用 PowerShell 解压
+            var result = await Process.run('powershell', [
+              '-Command',
+              'Expand-Archive -Path "$savePath" -DestinationPath "$saveDir" -Force'
+            ]);
+            if (result.exitCode == 0) {
+              extractSuccess = true;
+            } else {
+              // 如果 PowerShell 失败，尝试使用内置的 zip 库
+              _appendLog('PowerShell 解压失败，尝试备用方案...');
+              // 这里可以添加备用解压逻辑
+            }
+          } catch (e) {
+            _appendLog('Windows 解压失败: $e', isError: true);
+          }
+        } else {
+          // Linux/macOS 使用 tar 解压
+          var result = await Process.run('tar', ['-xzf', savePath, '-C', saveDir]);
+          if (result.exitCode == 0) {
+            extractSuccess = true;
+          } else {
+            _appendLog('解压失败: ${result.stderr}', isError: true);
+          }
+        }
+
+        if (!extractSuccess) {
           return false;
         }
 
         await file.delete(); // 删除临时压缩包
 
-        // 验证解压后的二进制文件路径
-        String extractedBinaryPath = '$saveDir/esptool-$version-linux-amd64/esptool';
-        if (!await File(extractedBinaryPath).exists()) {
-          // 容错路径查找
-          if (await File('$saveDir/esptool').exists()) {
-            extractedBinaryPath = '$saveDir/esptool';
-          } else {
-            _appendLog('解压后未能在预期路径找到 esptool 可执行文件', isError: true);
-            return false;
+        // 查找解压后的二进制文件
+        String extractedBinaryPath = '';
+        
+        // 尝试多个可能的路径
+        List<String> possiblePaths = [
+          '$saveDir/esptool-$version-windows-amd64/esptool.exe',
+          '$saveDir/esptool-$version-linux-amd64/esptool',
+          '$saveDir/esptool-$version-macos-universal/esptool',
+          '$saveDir/esptool.exe',
+          '$saveDir/esptool',
+        ];
+
+        for (String path in possiblePaths) {
+          if (await File(path).exists()) {
+            extractedBinaryPath = path;
+            break;
           }
         }
 
-        // 赋予可执行权限
-        await Process.run('chmod', ['+x', extractedBinaryPath]);
+        if (extractedBinaryPath.isEmpty) {
+          _appendLog('解压后未能在预期路径找到 esptool 可执行文件', isError: true);
+          return false;
+        }
+
+        // 非 Windows 系统赋予可执行权限
+        if (!Platform.isWindows) {
+          await Process.run('chmod', ['+x', extractedBinaryPath]);
+        }
 
         // 更新 UI 上的路径指向
         setState(() {
           _esptoolPath = extractedBinaryPath;
         });
 
-        _appendLog('esptool 工具链准备完毕！');
+        _appendLog('esptool 工具链准备完毕！路径: $_esptoolPath');
         return true;
       } else {
         _appendLog('下载失败，HTTP 状态码: ${response.statusCode}', isError: true);

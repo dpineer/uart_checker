@@ -257,6 +257,60 @@ class _WebSocketControlPageState extends State<WebSocketControlPage> {
     });
   }
 
+  void _copyAllLogs() {
+    if (_logEntries.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('没有可复制的内容'),
+          backgroundColor: vsCodeBlue,
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    StringBuffer allContent = StringBuffer();
+    
+    // 添加页面标题
+    allContent.writeln('=== WebSocket控制页面日志 ===');
+    allContent.writeln('时间: ${DateTime.now()}');
+    allContent.writeln('串口状态: ${_isConnected ? "已连接" : "未连接"}');
+    allContent.writeln('串口: $_selectedPort');
+    allContent.writeln('波特率: $_baudRate');
+    allContent.writeln('模式: ${_hexMode ? "HEX模式" : "文本模式"} ${_chartMode ? "图表模式" : ""}');
+    allContent.writeln();
+    
+    // 添加所有日志条目
+    allContent.writeln('--- 日志条目 (${_logEntries.length} 条) ---');
+    for (var entry in _logEntries) {
+      String timeStr = entry.timestamp != null 
+          ? '[${entry.timestamp!.hour.toString().padLeft(2, '0')}:${entry.timestamp!.minute.toString().padLeft(2, '0')}:${entry.timestamp!.second.toString().padLeft(2, '0')}]'
+          : '[--:--:--]';
+      
+      allContent.write('$timeStr ${entry.message}');
+      
+      if (entry.command != null) {
+        allContent.write(' (命令: ${entry.command})');
+      }
+      if (entry.response != null) {
+        allContent.write(' (响应: ${entry.response})');
+      }
+      
+      allContent.writeln();
+    }
+    
+    String contentToCopy = allContent.toString();
+    Clipboard.setData(ClipboardData(text: contentToCopy));
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('所有日志已复制到剪贴板 (${_logEntries.length} 条)'),
+        backgroundColor: vsCodeBlue,
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // 通过SerialPortHomePage.of(context)获取WebSocketServer实例
@@ -269,6 +323,11 @@ class _WebSocketControlPageState extends State<WebSocketControlPage> {
         backgroundColor: Color(0xFF1E1E1E),
         elevation: 0,
         actions: [
+          IconButton(
+            icon: Icon(Icons.copy_all, color: vsCodeBlue),
+            onPressed: _copyAllLogs,
+            tooltip: '复制所有日志',
+          ),
           Container(
             margin: EdgeInsets.all(8),
             padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),

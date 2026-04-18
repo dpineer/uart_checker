@@ -1204,6 +1204,67 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
     }
   }
 
+  void _copyAllDisplayContent() {
+    StringBuffer allContent = StringBuffer();
+    
+    // 添加页面标题
+    allContent.writeln('=== 串口通信页面内容 ===');
+    allContent.writeln('时间: ${DateTime.now()}');
+    allContent.writeln('连接状态: ${isConnected ? "已连接" : (_autoReconnect ? "重连中..." : "未连接")}');
+    allContent.writeln('串口: $selectedPort');
+    allContent.writeln('配置: ${selectedBaudRate} ${selectedDataBits}${selectedParity}${selectedStopBits}');
+    allContent.writeln('模式: ${hexMode ? "HEX模式" : "文本模式"} ${chartMode ? "图表模式" : ""}');
+    allContent.writeln();
+    
+    // 添加接收的数据
+    allContent.writeln('--- 接收的数据 (${_receivedEnhancedLines.isNotEmpty ? _receivedEnhancedLines.length : _receivedLines.length} 行) ---');
+    if (_receivedEnhancedLines.isNotEmpty) {
+      for (var line in _receivedEnhancedLines) {
+        allContent.writeln(line.toString());
+      }
+    } else if (_receivedLines.isNotEmpty) {
+      for (var line in _receivedLines) {
+        allContent.writeln(line.toString());
+      }
+    } else {
+      allContent.writeln('无数据');
+    }
+    allContent.writeln();
+    
+    // 添加图表数据（如果有）
+    if (chartMode && dataKeys.isNotEmpty) {
+      allContent.writeln('--- 图表数据 ---');
+      for (String key in dataKeys) {
+        if (chartData.containsKey(key) && chartData[key]!.isNotEmpty) {
+          allContent.write('$key: ');
+          List<FlSpot> points = chartData[key]!;
+          for (int i = 0; i < points.length; i++) {
+            if (i > 0) allContent.write(', ');
+            allContent.write('(${points[i].x}, ${points[i].y})');
+          }
+          allContent.writeln();
+        }
+      }
+      allContent.writeln();
+    }
+    
+    // 添加WebSocket服务器状态
+    if (_webSocketServer != null && _isWebSocketServerRunning) {
+      allContent.writeln('--- WebSocket服务器状态 ---');
+      allContent.writeln('端口: ${_webSocketServer!.port}');
+      allContent.writeln('运行状态: 运行中');
+      allContent.writeln();
+    }
+    
+    String contentToCopy = allContent.toString();
+    if (contentToCopy.trim().isNotEmpty) {
+      Clipboard.setData(ClipboardData(text: contentToCopy));
+      _showMessage('所有显示内容已复制到剪贴板');
+    } else {
+      _showMessage('没有可复制的内容');
+    }
+  }
+
   void _clearReceivedData() {
     setState(() {
       _receivedLines.clear();
@@ -1249,6 +1310,11 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
         backgroundColor: vsCodeBackground,
         elevation: 0,
         actions: [
+          IconButton(
+            icon: Icon(Icons.copy_all, color: vsCodeBlue),
+            onPressed: _copyAllDisplayContent,
+            tooltip: '复制所有显示内容',
+          ),
           IconButton(
             icon: Icon(Icons.refresh, color: vsCodeBlue),
             onPressed: _refreshPortList,
@@ -2362,6 +2428,60 @@ class _FirmwareFlashPageState extends State<FirmwareFlashPage> {
     }
   }
 
+  void _copyAllOutput() {
+    if (_outputLog.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('没有可复制的内容'),
+          backgroundColor: vsCodeBlue,
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    StringBuffer allContent = StringBuffer();
+    
+    // 添加页面标题
+    allContent.writeln('=== ESP32 固件烧录页面输出 ===');
+    allContent.writeln('时间: ${DateTime.now()}');
+    allContent.writeln('esptool路径: $_esptoolPath');
+    allContent.writeln('芯片类型: $_chip');
+    allContent.writeln('串口: $_port');
+    allContent.writeln('加密: ${_encrypt ? "启用" : "禁用"}');
+    allContent.writeln();
+    
+    // 添加配置信息
+    allContent.writeln('--- 烧录配置 ---');
+    if (_bootloaderPathCtrl.text.isNotEmpty) {
+      allContent.writeln('Bootloader: ${_bootloaderAddrCtrl.text} -> ${_bootloaderPathCtrl.text}');
+    }
+    if (_partitionPathCtrl.text.isNotEmpty) {
+      allContent.writeln('Partition Table: ${_partitionAddrCtrl.text} -> ${_partitionPathCtrl.text}');
+    }
+    if (_appPathCtrl.text.isNotEmpty) {
+      allContent.writeln('ESP-NOW App: ${_appAddrCtrl.text} -> ${_appPathCtrl.text}');
+    }
+    allContent.writeln();
+    
+    // 添加所有输出日志
+    allContent.writeln('--- 输出日志 (${_outputLog.length} 行) ---');
+    for (var line in _outputLog) {
+      allContent.writeln(line);
+    }
+    
+    String contentToCopy = allContent.toString();
+    Clipboard.setData(ClipboardData(text: contentToCopy));
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('所有输出已复制到剪贴板 (${_outputLog.length} 行)'),
+        backgroundColor: vsCodeBlue,
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -2369,6 +2489,13 @@ class _FirmwareFlashPageState extends State<FirmwareFlashPage> {
         title: Text('ESP32 固件烧录面板', style: TextStyle(color: vsCodeBlue)),
         backgroundColor: vsCodeBackground,
         elevation: 0,
+        actions: [
+          IconButton(
+            icon: Icon(Icons.copy_all, color: vsCodeBlue),
+            onPressed: _copyAllOutput,
+            tooltip: '复制所有输出',
+          ),
+        ],
       ),
       body: Container(
         color: vsCodeBackground,

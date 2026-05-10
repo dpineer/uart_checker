@@ -16,6 +16,8 @@ dependencies:
   cupertino_icons: ^1.0.8
   web_socket_channel: ^3.0.0
   http: ^1.2.2
+  dartssh2: ^2.10.1
+  xterm: ^4.0.0
 
 dev_dependencies:
   flutter_test:

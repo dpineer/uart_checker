@@ -9,6 +9,7 @@ import 'package:fl_chart/fl_chart.dart';
 import 'websocket_server.dart';
 import 'websocket_panel.dart';
 import 'websocket_control_page.dart';
+import 'ssh_terminal_page.dart';
 
 void main() {
   // 在运行应用之前，确保插件系统已初始化
@@ -52,8 +53,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   @override
   void initState() {
     super.initState();
-    // 修改为3个页面
-    _tabController = TabController(length: 3, vsync: this);
+    // 扩展为4个页面，以容纳SSH终端
+    _tabController = TabController(length: 4, vsync: this);
   }
   
   @override
@@ -95,6 +96,12 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                 selectedIcon: Icon(Icons.memory, color: Color(0xFF569CD6)),
                 label: Text('固件烧录', style: TextStyle(color: Color(0xFF858585))),
               ),
+              // 新增: SSH终端侧边栏导航
+              NavigationRailDestination(
+                icon: Icon(Icons.terminal, color: Color(0xFF858585)),
+                selectedIcon: Icon(Icons.terminal, color: Color(0xFF569CD6)),
+                label: Text('SSH终端', style: TextStyle(color: Color(0xFF858585))),
+              ),
             ],
           ),
           VerticalDivider(thickness: 1, width: 1),
@@ -106,6 +113,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                 WebSocketControlPage(),
                 // ====== 新增：固件烧录页面视图 ======
                 FirmwareFlashPage(), 
+                // 新增: SSH终端页面视图
+                SshTerminalPage(),
               ],
             ),
           ),

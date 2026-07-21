@@ -1,13 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io'; // <-- 新增，用于调用外部进程(esptool)
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_libserialport/flutter_libserialport.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'app_theme.dart';
 import 'websocket_server.dart';
-import 'websocket_panel.dart';
 import 'websocket_control_page.dart';
 import 'ssh_terminal_page.dart';
 
@@ -20,101 +19,172 @@ void main() {
   runApp(CommunicationToolApp());
 }
 
-class CommunicationToolApp extends StatelessWidget {
+class CommunicationToolApp extends StatefulWidget {
+  @override
+  _CommunicationToolAppState createState() => _CommunicationToolAppState();
+}
+
+class _CommunicationToolAppState extends State<CommunicationToolApp> {
+  bool _isDarkMode = true;
+
+  void _toggleTheme() {
+    setState(() {
+      _isDarkMode = !_isDarkMode;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: '通信工具',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor: const Color(0xFF1E1E1E),
-        primaryColor: const Color(0xFF569CD6),
-        colorScheme: ColorScheme.dark(
-          primary: const Color(0xFF569CD6),
-          secondary: const Color(0xFFCE9178),
-          surface: const Color(0xFF252526),
-          background: const Color(0xFF1E1E1E),
-        ),
+    final colors = AppColors(isDarkMode: _isDarkMode, child: SizedBox());
+    return AppColors(
+      isDarkMode: _isDarkMode,
+      child: MaterialApp(
+        title: '通信工具',
+        debugShowCheckedModeBanner: false,
+        theme: colors.themeData,
+        home: HomePage(onToggleTheme: _toggleTheme),
       ),
-      home: HomePage(),
     );
   }
 }
 
 class HomePage extends StatefulWidget {
+  final VoidCallback onToggleTheme;
+
+  const HomePage({Key? key, required this.onToggleTheme}) : super(key: key);
+
   @override
   _HomePageState createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin {
+class _HomePageState extends State<HomePage> {
   int _selectedIndex = 0;
-  late TabController _tabController;
-  
-  @override
-  void initState() {
-    super.initState();
-    // 扩展为4个页面，以容纳SSH终端
-    _tabController = TabController(length: 4, vsync: this);
-  }
-  
-  @override
-  void dispose() {
-    _tabController.dispose();
-    super.dispose();
-  }
-  
+
   void _onDestinationSelected(int index) {
     setState(() {
       _selectedIndex = index;
     });
   }
+
+  void _showSettingsDialog(BuildContext context) {
+    final colors = AppColors.of(context);
+    showDialog(
+      context: context,
+      builder: (context) {
+        bool isDarkMode = colors.isDarkMode;
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: colors.surface,
+              title: Row(
+                children: [
+                  Icon(Icons.settings, color: colors.primary),
+                  SizedBox(width: 8),
+                  Text('设置', style: TextStyle(color: colors.text)),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ListTile(
+                    leading: Icon(
+                      isDarkMode ? Icons.dark_mode : Icons.light_mode,
+                      color: colors.primary,
+                    ),
+                    title: Text('主题模式', style: TextStyle(color: colors.text)),
+                    subtitle: Text(
+                      isDarkMode ? '深色模式' : '白昼模式',
+                      style: TextStyle(color: colors.textSecondary),
+                    ),
+                    trailing: Switch(
+                      value: isDarkMode,
+                      activeColor: colors.primary,
+                      onChanged: (value) {
+                        setDialogState(() {
+                          isDarkMode = value;
+                        });
+                      },
+                    ),
+                    onTap: () {
+                      setDialogState(() {
+                        isDarkMode = !isDarkMode;
+                      });
+                    },
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    if (isDarkMode != colors.isDarkMode) {
+                      widget.onToggleTheme();
+                    }
+                    Navigator.of(context).pop();
+                  },
+                  child: Text('确定', style: TextStyle(color: colors.primary)),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: Text('取消', style: TextStyle(color: colors.textSecondary)),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
   
   @override
   Widget build(BuildContext context) {
+    final colors = AppColors.of(context);
     return Scaffold(
       body: Row(
         children: [
           NavigationRail(
-            backgroundColor: Color(0xFF1E1E1E),
+            backgroundColor: colors.navRailBackground,
             selectedIndex: _selectedIndex,
             onDestinationSelected: _onDestinationSelected,
             labelType: NavigationRailLabelType.selected,
             destinations: [
               NavigationRailDestination(
-                icon: Icon(Icons.settings_input_component, color: Color(0xFF858585)),
-                selectedIcon: Icon(Icons.settings_input_component, color: Color(0xFF569CD6)),
-                label: Text('串口通信', style: TextStyle(color: Color(0xFF858585))),
+                icon: Icon(Icons.settings_input_component, color: colors.navigationRailColor(_selectedIndex, 0)),
+                selectedIcon: Icon(Icons.settings_input_component, color: colors.primary),
+                label: Text('串口通信', style: TextStyle(color: colors.navigationRailColor(_selectedIndex, 0))),
               ),
               NavigationRailDestination(
-                icon: Icon(Icons.network_wifi, color: Color(0xFF858585)),
-                selectedIcon: Icon(Icons.network_wifi, color: Color(0xFF569CD6)),
-                label: Text('WebSocket控制', style: TextStyle(color: Color(0xFF858585))),
+                icon: Icon(Icons.network_wifi, color: colors.navigationRailColor(_selectedIndex, 1)),
+                selectedIcon: Icon(Icons.network_wifi, color: colors.primary),
+                label: Text('WebSocket控制', style: TextStyle(color: colors.navigationRailColor(_selectedIndex, 1))),
               ),
-              // ====== 新增：固件烧录侧边栏导航 ======
               NavigationRailDestination(
-                icon: Icon(Icons.memory, color: Color(0xFF858585)),
-                selectedIcon: Icon(Icons.memory, color: Color(0xFF569CD6)),
-                label: Text('固件烧录', style: TextStyle(color: Color(0xFF858585))),
-              ),
-              // 新增: SSH终端侧边栏导航
-              NavigationRailDestination(
-                icon: Icon(Icons.terminal, color: Color(0xFF858585)),
-                selectedIcon: Icon(Icons.terminal, color: Color(0xFF569CD6)),
-                label: Text('SSH终端', style: TextStyle(color: Color(0xFF858585))),
+                icon: Icon(Icons.terminal, color: colors.navigationRailColor(_selectedIndex, 2)),
+                selectedIcon: Icon(Icons.terminal, color: colors.primary),
+                label: Text('SSH终端', style: TextStyle(color: colors.navigationRailColor(_selectedIndex, 2))),
               ),
             ],
           ),
           VerticalDivider(thickness: 1, width: 1),
           Expanded(
-            child: IndexedStack(
-              index: _selectedIndex,
+            child: Stack(
               children: [
-                SerialPortHomePage(),
-                WebSocketControlPage(),
-                // ====== 新增：固件烧录页面视图 ======
-                FirmwareFlashPage(), 
-                // 新增: SSH终端页面视图
-                SshTerminalPage(),
+                IndexedStack(
+                  index: _selectedIndex,
+                  children: [
+                    SerialPortHomePage(),
+                    WebSocketControlPage(),
+                    SshTerminalPage(),
+                  ],
+                ),
+                Positioned(
+                  right: 8,
+                  bottom: 8,
+                  child: FloatingActionButton.small(
+                    onPressed: () => _showSettingsDialog(context),
+                    tooltip: '设置',
+                    child: Icon(Icons.settings),
+                  ),
+                ),
               ],
             ),
           ),
@@ -135,15 +205,7 @@ class SerialPortHomePage extends StatefulWidget {
 }
 
 class _SerialPortHomePageState extends State<SerialPortHomePage> {
-  // 颜色常量定义
-  static const Color vsCodeBackground = Color(0xFF1E1E1E);
-  static const Color vsCodeSurface = Color(0xFF252526);
-  static const Color vsCodeBlue = Color(0xFF569CD6);
-  static const Color vsCodeText = Color(0xFFD4D4D4);
-  static const Color vsCodeTextSecondary = Color(0xFF858585);
-  static const Color receiveColor = Color(0xFF4EC9B0);
-  static const Color sendColor = Color(0xFFCE9178);
-  static const Color hexBackgroundColor = Color(0xFF334D4A); // HEX数据背景色
+  AppColors get _colors => AppColors.of(context);
 
   // 串口相关变量
   SerialPort? _serialPort;
@@ -1305,7 +1367,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
-        backgroundColor: vsCodeBlue,
+        backgroundColor: _colors.primary,
         duration: Duration(seconds: 2),
       ),
     );
@@ -1315,17 +1377,17 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('动态串口图表工具', style: TextStyle(color: vsCodeBlue)),
-        backgroundColor: vsCodeBackground,
+        title: Text('动态串口图表工具', style: TextStyle(color: _colors.primary)),
+        backgroundColor: _colors.background,
         elevation: 0,
         actions: [
           IconButton(
-            icon: Icon(Icons.copy_all, color: vsCodeBlue),
+            icon: Icon(Icons.copy_all, color: _colors.primary),
             onPressed: _copyAllDisplayContent,
             tooltip: '复制所有显示内容',
           ),
           IconButton(
-            icon: Icon(Icons.refresh, color: vsCodeBlue),
+            icon: Icon(Icons.refresh, color: _colors.primary),
             onPressed: _refreshPortList,
             tooltip: '刷新串口列表',
           ),
@@ -1346,7 +1408,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
         ],
       ),
       body: Container(
-        color: vsCodeBackground,
+        color: _colors.background,
         padding: EdgeInsets.all(16.0),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1375,7 +1437,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
     return Container(
       height: 250,
       decoration: BoxDecoration(
-        border: Border.all(color: vsCodeBlue, width: 2),
+        border: Border.all(color: _colors.primary, width: 2),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
@@ -1383,7 +1445,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
           Container(
             padding: EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: vsCodeBlue.withOpacity(0.1),
+              color: _colors.primary.withOpacity(0.1),
               borderRadius: BorderRadius.only(
                 topLeft: Radius.circular(6),
                 topRight: Radius.circular(6),
@@ -1391,12 +1453,12 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
             ),
             child: Row(
               children: [
-                Icon(Icons.input, color: vsCodeBlue, size: 16),
+                Icon(Icons.input, color: _colors.primary, size: 16),
                 SizedBox(width: 8),
                 Text(
                   '接收的数据 (${_receivedLines.length} 行)',
                   style: TextStyle(
-                    color: vsCodeBlue,
+                    color: _colors.primary,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
@@ -1406,23 +1468,23 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
                     Container(
                       width: 10,
                       height: 10,
-                      color: receiveColor,
+                      color: _colors.receive,
                       margin: EdgeInsets.only(right: 4),
                     ),
                     Text(
                       '接收',
-                      style: TextStyle(color: vsCodeText, fontSize: 10),
+                      style: TextStyle(color: _colors.text, fontSize: 10),
                     ),
                     SizedBox(width: 8),
                     Container(
                       width: 10,
                       height: 10,
-                      color: sendColor,
+                      color: _colors.send,
                       margin: EdgeInsets.only(right: 4),
                     ),
                     Text(
                       '发送',
-                      style: TextStyle(color: vsCodeText, fontSize: 10),
+                      style: TextStyle(color: _colors.text, fontSize: 10),
                     ),
                     SizedBox(width: 16),
                   ],
@@ -1431,14 +1493,14 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
                   onPressed: _copyReceivedData,
                   child: Text(
                     '复制',
-                    style: TextStyle(color: vsCodeBlue, fontSize: 12),
+                    style: TextStyle(color: _colors.primary, fontSize: 12),
                   ),
                 ),
                 TextButton(
                   onPressed: _clearReceivedData,
                   child: Text(
                     '清空',
-                    style: TextStyle(color: vsCodeBlue, fontSize: 12),
+                    style: TextStyle(color: _colors.primary, fontSize: 12),
                   ),
                 ),
               ],
@@ -1467,17 +1529,17 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   }
 
   Widget _buildDataLine(DataLine dataLine, int index) {
-    Color lineColor = vsCodeText;
+    Color lineColor = _colors.text;
 
     switch (dataLine.type) {
       case LineType.send:
-        lineColor = sendColor;
+        lineColor = _colors.send;
         break;
       case LineType.receive:
-        lineColor = receiveColor;
+        lineColor = _colors.receive;
         break;
       case LineType.system:
-        lineColor = vsCodeTextSecondary;
+        lineColor = _colors.textSecondary;
         break;
     }
 
@@ -1493,17 +1555,17 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   }
 
   Widget _buildEnhancedDataLine(EnhancedDataLine dataLine, int index) {
-    Color textColor = vsCodeText;
+    Color textColor = _colors.text;
     
     switch (dataLine.lineType) {
       case LineType.send:
-        textColor = sendColor;
+        textColor = _colors.send;
         break;
       case LineType.receive:
-        textColor = receiveColor;
+        textColor = _colors.receive;
         break;
       case LineType.system:
-        textColor = vsCodeTextSecondary;
+        textColor = _colors.textSecondary;
         break;
     }
     
@@ -1549,7 +1611,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
                   style: TextStyle(
                     color: textColor,
                     fontSize: 14,
-                    backgroundColor: hexBackgroundColor,
+                    backgroundColor: _colors.hexBackground,
                   ),
                 );
               }
@@ -1571,7 +1633,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
               child: Container(
                 constraints: BoxConstraints(minHeight: 50, maxHeight: 120),
                 decoration: BoxDecoration(
-                  border: Border.all(color: vsCodeBlue, width: 1.5),
+                  border: Border.all(color: _colors.primary, width: 1.5),
                   borderRadius: BorderRadius.circular(4),
                 ),
                 padding: EdgeInsets.symmetric(horizontal: 12),
@@ -1581,14 +1643,14 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
                   child: TextField(
                     onChanged: (value) => inputData = value,
                     controller: TextEditingController(text: inputData),
-                    style: TextStyle(color: vsCodeText),
+                    style: TextStyle(color: _colors.text),
                     maxLines: null,
                     scrollController: _inputScrollController,
                     decoration: InputDecoration(
                       hintText: hexMode
                           ? '输入HEX数据（如: 48 65 6C 6C 6F）'
                           : '输入要发送的文本',
-                      hintStyle: TextStyle(color: vsCodeTextSecondary),
+                      hintStyle: TextStyle(color: _colors.textSecondary),
                       border: InputBorder.none,
                       contentPadding: EdgeInsets.symmetric(vertical: 15),
                     ),
@@ -1602,10 +1664,10 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
               child: ElevatedButton(
                 onPressed: _sendData,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: vsCodeBackground,
-                  foregroundColor: vsCodeBlue,
+                  backgroundColor: _colors.background,
+                  foregroundColor: _colors.primary,
                   side: BorderSide(
-                    color: vsCodeBlue.withOpacity(0.7),
+                    color: _colors.primary.withOpacity(0.7),
                     width: 1.5,
                   ),
                   shape: RoundedRectangleBorder(
@@ -1634,7 +1696,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
       height: 200,
       child: Container(
         decoration: BoxDecoration(
-          border: Border.all(color: vsCodeBlue, width: 2),
+          border: Border.all(color: _colors.primary, width: 2),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Column(
@@ -1642,7 +1704,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
             Container(
               padding: EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: vsCodeBlue.withOpacity(0.1),
+                color: _colors.primary.withOpacity(0.1),
                 borderRadius: BorderRadius.only(
                   topLeft: Radius.circular(6),
                   topRight: Radius.circular(6),
@@ -1650,12 +1712,12 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
               ),
               child: Row(
                 children: [
-                  Icon(Icons.show_chart, color: vsCodeBlue, size: 16),
+                  Icon(Icons.show_chart, color: _colors.primary, size: 16),
                   SizedBox(width: 8),
                   Text(
                     '动态数据图表',
                     style: TextStyle(
-                      color: vsCodeBlue,
+                      color: _colors.primary,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
@@ -1664,7 +1726,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
                         ? Container()
                         : Text(
                             '数据键: ${dataKeys.join(', ')}',
-                            style: TextStyle(color: vsCodeText, fontSize: 10),
+                            style: TextStyle(color: _colors.text, fontSize: 10),
                             overflow: TextOverflow.ellipsis,
                           ),
                   ),
@@ -1680,7 +1742,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
                             ? '等待数据...\n格式示例: [data:123,BatVoltage:13.24,Demo:2]'
                             : '图表显示区域\n点击"开启图表"启用可视化',
                         textAlign: TextAlign.center,
-                        style: TextStyle(color: vsCodeTextSecondary),
+                        style: TextStyle(color: _colors.textSecondary),
                       ),
                     ),
             ),
@@ -1704,11 +1766,11 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text('等待数据...', style: TextStyle(color: vsCodeTextSecondary)),
+            Text('等待数据...', style: TextStyle(color: _colors.textSecondary)),
             SizedBox(height: 8),
             Text(
               '最新接收: ${_receivedLines.isNotEmpty ? _receivedLines.last.text : '无数据'}',
-              style: TextStyle(color: vsCodeTextSecondary, fontSize: 12),
+              style: TextStyle(color: _colors.textSecondary, fontSize: 12),
             ),
           ],
         ),
@@ -1779,7 +1841,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
                     padding: const EdgeInsets.only(top: 8.0),
                     child: Text(
                       value.toInt().toString(),
-                      style: TextStyle(color: vsCodeText, fontSize: 10),
+                      style: TextStyle(color: _colors.text, fontSize: 10),
                     ),
                   );
                 },
@@ -1793,7 +1855,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
                 getTitlesWidget: (value, meta) {
                   return Text(
                     value.toStringAsFixed(2),
-                    style: TextStyle(color: vsCodeText, fontSize: 10),
+                    style: TextStyle(color: _colors.text, fontSize: 10),
                   );
                 },
               ),
@@ -1807,20 +1869,20 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
             horizontalInterval: (maxY - minY) / 5,
             getDrawingHorizontalLine: (value) {
               return FlLine(
-                color: vsCodeTextSecondary.withOpacity(0.2),
+                color: _colors.textSecondary.withOpacity(0.2),
                 strokeWidth: 1,
               );
             },
             getDrawingVerticalLine: (value) {
               return FlLine(
-                color: vsCodeTextSecondary.withOpacity(0.1),
+                color: _colors.textSecondary.withOpacity(0.1),
                 strokeWidth: 1,
               );
             },
           ),
           borderData: FlBorderData(
             show: true,
-            border: Border.all(color: vsCodeBlue.withOpacity(0.3), width: 1),
+            border: Border.all(color: _colors.primary.withOpacity(0.3), width: 1),
           ),
         ),
       ),
@@ -1831,7 +1893,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
     return Container(
       width: 250,
       decoration: BoxDecoration(
-        border: Border.all(color: vsCodeBlue.withOpacity(0.5), width: 1),
+        border: Border.all(color: _colors.primary.withOpacity(0.5), width: 1),
         borderRadius: BorderRadius.circular(8),
       ),
       padding: EdgeInsets.all(12),
@@ -1904,7 +1966,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
         Text(
           label,
           style: TextStyle(
-            color: vsCodeBlue,
+            color: _colors.primary,
             fontSize: 12,
             fontWeight: FontWeight.bold,
           ),
@@ -1913,7 +1975,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
         Container(
           height: 40,
           decoration: BoxDecoration(
-            border: Border.all(color: vsCodeBlue, width: 1),
+            border: Border.all(color: _colors.primary, width: 1),
             borderRadius: BorderRadius.circular(4),
           ),
           padding: EdgeInsets.symmetric(horizontal: 8),
@@ -1921,9 +1983,9 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
             child: DropdownButton<String>(
               value: value,
               isExpanded: true,
-              dropdownColor: vsCodeSurface,
-              style: TextStyle(color: vsCodeText, fontSize: 12),
-              icon: Icon(Icons.arrow_drop_down, color: vsCodeBlue),
+              dropdownColor: _colors.surface,
+              style: TextStyle(color: _colors.text, fontSize: 12),
+              icon: Icon(Icons.arrow_drop_down, color: _colors.primary),
               items: options.map((String value) {
                 return DropdownMenuItem<String>(
                   value: value,
@@ -1957,7 +2019,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
         Text(
           'HEX模式',
           style: TextStyle(
-            color: vsCodeBlue,
+            color: _colors.primary,
             fontSize: 12,
             fontWeight: FontWeight.bold,
           ),
@@ -1968,10 +2030,10 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
           dense: true,
           title: Text(
             hexMode ? 'HEX模式' : '文本模式',
-            style: TextStyle(color: vsCodeText, fontSize: 12),
+            style: TextStyle(color: _colors.text, fontSize: 12),
           ),
           value: hexMode,
-          activeColor: vsCodeBlue,
+          activeColor: _colors.primary,
           onChanged: (value) => setState(() => hexMode = value),
         ),
       ],
@@ -1985,7 +2047,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
         Text(
           '时间戳显示',
           style: TextStyle(
-            color: vsCodeBlue,
+            color: _colors.primary,
             fontSize: 12,
             fontWeight: FontWeight.bold,
           ),
@@ -1996,10 +2058,10 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
           dense: true,
           title: Text(
             showTimestamp ? '显示时间戳' : '隐藏时间戳',
-            style: TextStyle(color: vsCodeText, fontSize: 12),
+            style: TextStyle(color: _colors.text, fontSize: 12),
           ),
           value: showTimestamp,
-          activeColor: vsCodeBlue,
+          activeColor: _colors.primary,
           onChanged: (value) => setState(() => showTimestamp = value),
         ),
       ],
@@ -2022,9 +2084,9 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
           });
         },
         style: ElevatedButton.styleFrom(
-          backgroundColor: vsCodeSurface,
-          foregroundColor: vsCodeBlue,
-          side: BorderSide(color: vsCodeBlue, width: 1.5),
+          backgroundColor: _colors.surface,
+          foregroundColor: _colors.primary,
+          side: BorderSide(color: _colors.primary, width: 1.5),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
         ),
         child: Row(
@@ -2108,691 +2170,5 @@ class DataLine {
     } else {
       return text;
     }
-  }
-}
-
-// ==========================================
-// 固件烧录页面 (基于 esptool v5.2.0)
-// ==========================================
-class FirmwareFlashPage extends StatefulWidget {
-  @override
-  _FirmwareFlashPageState createState() => _FirmwareFlashPageState();
-}
-
-class _FirmwareFlashPageState extends State<FirmwareFlashPage> {
-  // 主题颜色（与主界面保持一致）
-  static const Color vsCodeBackground = Color(0xFF1E1E1E);
-  static const Color vsCodeSurface = Color(0xFF252526);
-  static const Color vsCodeBlue = Color(0xFF569CD6);
-  static const Color vsCodeText = Color(0xFFD4D4D4);
-  static const Color vsCodeTextSecondary = Color(0xFF858585);
-  static const Color successColor = Color(0xFF4EC9B0);
-  static const Color errorColor = Color(0xFFF48771);
-
-  // 默认配置（直接填入你需要烧录的路径和参数）
-  String _esptoolPath = './esptool';
-  String _chip = 'esp32c3';
-  String _port = '';
-  bool _encrypt = true;
-  
-  List<String> _availablePorts =[];
-
-  final TextEditingController _bootloaderPathCtrl = TextEditingController(text: '');
-  final TextEditingController _partitionPathCtrl = TextEditingController(text: '');
-  final TextEditingController _appPathCtrl = TextEditingController(text: '');
-
-  final TextEditingController _bootloaderAddrCtrl = TextEditingController(text: '0x0');
-  final TextEditingController _partitionAddrCtrl = TextEditingController(text: '0xC000');
-  final TextEditingController _appAddrCtrl = TextEditingController(text: '0x20000');
-
-  final List<String> _outputLog =[];
-  final ScrollController _scrollController = ScrollController();
-  
-  bool _isFlashing = false;
-  Process? _flashProcess;
-
-  @override
-  void initState() {
-    super.initState();
-    _refreshPorts();
-    _appendLog('等待就绪...');
-    _appendLog('默认适配: esptool v5.2.0 命令行工具');
-  }
-
-  @override
-  void dispose() {
-    _flashProcess?.kill();
-    _scrollController.dispose();
-    _bootloaderPathCtrl.dispose();
-    _partitionPathCtrl.dispose();
-    _appPathCtrl.dispose();
-    _bootloaderAddrCtrl.dispose();
-    _partitionAddrCtrl.dispose();
-    _appAddrCtrl.dispose();
-    super.dispose();
-  }
-
-  void _refreshPorts() {
-    setState(() {
-      _availablePorts = SerialPort.availablePorts;
-      if (_availablePorts.isNotEmpty && (_port.isEmpty || !_availablePorts.contains(_port))) {
-        _port = _availablePorts.first;
-      }
-    });
-  }
-
-  void _appendLog(String text, {bool isError = false}) {
-    setState(() {
-      final prefix = isError ? '[ERROR] ' : '';
-      _outputLog.add('$prefix$text');
-    });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
-      }
-    });
-  }
-
-  // ==================== 修改：附带校验与自动下载逻辑的烧录进程 ====================
-  Future<void> _startFlashing() async {
-    setState(() {
-      _isFlashing = true;
-      _outputLog.clear();
-    });
-
-    // 1. 检查 esptool 二进制文件是否存在，若缺失则触发下载
-    File esptoolFile = File(_esptoolPath);
-    if (!await esptoolFile.exists()) {
-      _appendLog('未能在[$_esptoolPath] 找到 esptool 执行文件。', isError: true);
-      _appendLog('正在尝试自动下载并配置对应的 esptool 工具链...');
-      
-      bool success = await _downloadEsptool();
-      if (!success) {
-        _appendLog('工具链自动配置失败，请检查网络或手动下载并指定路径。', isError: true);
-        setState(() {
-          _isFlashing = false;
-        });
-        return;
-      }
-    } else {
-      // 若存在则确保 Linux 环境下具备可执行权限
-      if (Platform.isLinux || Platform.isMacOS) {
-        await Process.run('chmod',['+x', _esptoolPath]);
-      }
-    }
-
-    if (_port.isEmpty) {
-      _appendLog('错误: 请先选择串口', isError: true);
-      setState(() {
-        _isFlashing = false;
-      });
-      return;
-    }
-
-    // 2. 拼装命令参数
-    List<String> args = [
-      '--chip', _chip,
-      '--port', _port,
-      'write-flash'
-    ];
-    
-    if (_encrypt) {
-      args.add('--encrypt');
-    }
-    
-    if (_bootloaderPathCtrl.text.isNotEmpty) {
-      args.addAll([_bootloaderAddrCtrl.text, _bootloaderPathCtrl.text]);
-    }
-    if (_partitionPathCtrl.text.isNotEmpty) {
-      args.addAll([_partitionAddrCtrl.text, _partitionPathCtrl.text]);
-    }
-    if (_appPathCtrl.text.isNotEmpty) {
-      args.addAll([_appAddrCtrl.text, _appPathCtrl.text]);
-    }
-
-    _appendLog('执行命令: $_esptoolPath ${args.join(' ')}');
-    _appendLog('----------------------------------------------------');
-
-    try {
-      _flashProcess = await Process.start(_esptoolPath, args);
-
-      _flashProcess!.stdout.transform(utf8.decoder).listen((data) {
-        final lines = data.split(RegExp(r'[\r\n]+'));
-        for (var line in lines) {
-          if (line.trim().isNotEmpty) _appendLog(line.trim());
-        }
-      });
-
-      _flashProcess!.stderr.transform(utf8.decoder).listen((data) {
-        final lines = data.split(RegExp(r'[\r\n]+'));
-        for (var line in lines) {
-          if (line.trim().isNotEmpty) _appendLog(line.trim(), isError: true);
-        }
-      });
-
-      int exitCode = await _flashProcess!.exitCode;
-      _appendLog('----------------------------------------------------');
-      if (exitCode == 0) {
-        _appendLog('烧录成功完成！', isError: false);
-      } else {
-        _appendLog('烧录失败，退出代码: $exitCode', isError: true);
-      }
-    } catch (e) {
-      _appendLog('启动进程失败: $e', isError: true);
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isFlashing = false;
-          _flashProcess = null;
-        });
-      }
-    }
-  }
-
-  // ==================== 新增：自动下载和配置工具链（跨平台支持） ====================
-  Future<bool> _downloadEsptool() async {
-    String version = 'v5.2.0';
-    String fileName = '';
-    String url = '';
-    String saveDir = '${Directory.current.path}/tools';
-
-    // 根据操作系统选择对应的文件
-    if (Platform.isWindows) {
-      fileName = 'esptool-$version-windows-amd64.zip';
-      _appendLog('检测到 Windows 系统，下载 Windows 版本...');
-    } else if (Platform.isLinux) {
-      fileName = 'esptool-$version-linux-amd64.tar.gz';
-      _appendLog('检测到 Linux 系统，下载 Linux 版本...');
-    } else if (Platform.isMacOS) {
-      fileName = 'esptool-$version-macos-universal.tar.gz';
-      _appendLog('检测到 macOS 系统，下载 macOS 版本...');
-    } else {
-      _appendLog('不支持的操作系统，请手动下载 esptool', isError: true);
-      return false;
-    }
-
-    url = 'https://github.com/espressif/esptool/releases/download/$version/$fileName';
-
-    try {
-      Directory(saveDir).createSync(recursive: true);
-      String savePath = '$saveDir/$fileName';
-
-      _appendLog('开始下载 esptool $version ...');
-      _appendLog('目标路径: $savePath');
-
-      var httpClient = HttpClient();
-      var request = await httpClient.getUrl(Uri.parse(url));
-      var response = await request.close();
-
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        var file = File(savePath);
-        var sink = file.openWrite();
-
-        int downloaded = 0;
-        int contentLength = response.contentLength;
-        int lastReportedProgress = -1;
-
-        await response.listen((List<int> chunk) {
-          sink.add(chunk);
-          downloaded += chunk.length;
-          if (contentLength > 0) {
-            int progress = (downloaded * 100 / contentLength).round();
-            // 每隔 10% 汇报一次进度
-            if (progress % 10 == 0 && progress != lastReportedProgress) {
-              _appendLog('下载进度: $progress%');
-              lastReportedProgress = progress;
-            }
-          }
-        }).asFuture();
-
-        await sink.close();
-        _appendLog('下载完成，正在解压...');
-
-        // 根据操作系统使用不同的解压方式
-        bool extractSuccess = false;
-        if (Platform.isWindows) {
-          // Windows 使用 zip 解压
-          try {
-            // 尝试使用 PowerShell 解压
-            var result = await Process.run('powershell', [
-              '-Command',
-              'Expand-Archive -Path "$savePath" -DestinationPath "$saveDir" -Force'
-            ]);
-            if (result.exitCode == 0) {
-              extractSuccess = true;
-            } else {
-              // 如果 PowerShell 失败，尝试使用内置的 zip 库
-              _appendLog('PowerShell 解压失败，尝试备用方案...');
-              // 这里可以添加备用解压逻辑
-            }
-          } catch (e) {
-            _appendLog('Windows 解压失败: $e', isError: true);
-          }
-        } else {
-          // Linux/macOS 使用 tar 解压
-          var result = await Process.run('tar', ['-xzf', savePath, '-C', saveDir]);
-          if (result.exitCode == 0) {
-            extractSuccess = true;
-          } else {
-            _appendLog('解压失败: ${result.stderr}', isError: true);
-          }
-        }
-
-        if (!extractSuccess) {
-          return false;
-        }
-
-        await file.delete(); // 删除临时压缩包
-
-        // 查找解压后的二进制文件
-        String extractedBinaryPath = '';
-        
-        // 尝试多个可能的路径
-        List<String> possiblePaths = [
-          '$saveDir/esptool-$version-windows-amd64/esptool.exe',
-          '$saveDir/esptool-$version-linux-amd64/esptool',
-          '$saveDir/esptool-$version-macos-universal/esptool',
-          '$saveDir/esptool.exe',
-          '$saveDir/esptool',
-        ];
-
-        for (String path in possiblePaths) {
-          if (await File(path).exists()) {
-            extractedBinaryPath = path;
-            break;
-          }
-        }
-
-        if (extractedBinaryPath.isEmpty) {
-          _appendLog('解压后未能在预期路径找到 esptool 可执行文件', isError: true);
-          return false;
-        }
-
-        // 非 Windows 系统赋予可执行权限
-        if (!Platform.isWindows) {
-          await Process.run('chmod', ['+x', extractedBinaryPath]);
-        }
-
-        // 更新 UI 上的路径指向
-        setState(() {
-          _esptoolPath = extractedBinaryPath;
-        });
-
-        _appendLog('esptool 工具链准备完毕！路径: $_esptoolPath');
-        return true;
-      } else {
-        _appendLog('下载失败，HTTP 状态码: ${response.statusCode}', isError: true);
-        return false;
-      }
-    } catch (e) {
-      _appendLog('下载或配置异常: $e', isError: true);
-      return false;
-    }
-  }
-
-  void _stopFlashing() {
-    if (_flashProcess != null) {
-      _flashProcess!.kill();
-      _appendLog('操作已被用户手动中止。', isError: true);
-    }
-  }
-
-  void _copyAllOutput() {
-    if (_outputLog.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('没有可复制的内容'),
-          backgroundColor: vsCodeBlue,
-          duration: Duration(seconds: 2),
-        ),
-      );
-      return;
-    }
-
-    StringBuffer allContent = StringBuffer();
-    
-    // 添加页面标题
-    allContent.writeln('=== ESP32 固件烧录页面输出 ===');
-    allContent.writeln('时间: ${DateTime.now()}');
-    allContent.writeln('esptool路径: $_esptoolPath');
-    allContent.writeln('芯片类型: $_chip');
-    allContent.writeln('串口: $_port');
-    allContent.writeln('加密: ${_encrypt ? "启用" : "禁用"}');
-    allContent.writeln();
-    
-    // 添加配置信息
-    allContent.writeln('--- 烧录配置 ---');
-    if (_bootloaderPathCtrl.text.isNotEmpty) {
-      allContent.writeln('Bootloader: ${_bootloaderAddrCtrl.text} -> ${_bootloaderPathCtrl.text}');
-    }
-    if (_partitionPathCtrl.text.isNotEmpty) {
-      allContent.writeln('Partition Table: ${_partitionAddrCtrl.text} -> ${_partitionPathCtrl.text}');
-    }
-    if (_appPathCtrl.text.isNotEmpty) {
-      allContent.writeln('ESP-NOW App: ${_appAddrCtrl.text} -> ${_appPathCtrl.text}');
-    }
-    allContent.writeln();
-    
-    // 添加所有输出日志
-    allContent.writeln('--- 输出日志 (${_outputLog.length} 行) ---');
-    for (var line in _outputLog) {
-      allContent.writeln(line);
-    }
-    
-    String contentToCopy = allContent.toString();
-    Clipboard.setData(ClipboardData(text: contentToCopy));
-    
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('所有输出已复制到剪贴板 (${_outputLog.length} 行)'),
-        backgroundColor: vsCodeBlue,
-        duration: Duration(seconds: 2),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text('ESP32 固件烧录面板', style: TextStyle(color: vsCodeBlue)),
-        backgroundColor: vsCodeBackground,
-        elevation: 0,
-        actions: [
-          IconButton(
-            icon: Icon(Icons.copy_all, color: vsCodeBlue),
-            onPressed: _copyAllOutput,
-            tooltip: '复制所有输出',
-          ),
-        ],
-      ),
-      body: Container(
-        color: vsCodeBackground,
-        padding: EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // ========== 配置区域 ==========
-            Container(
-              padding: EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                border: Border.all(color: vsCodeBlue.withOpacity(0.5), width: 1),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        flex: 2,
-                        child: _buildTextField('esptool 路径', (val) => _esptoolPath = val, _esptoolPath),
-                      ),
-                      SizedBox(width: 16),
-                      Expanded(
-                        flex: 1,
-                        child: _buildTextField('芯片 (--chip)', (val) => _chip = val, _chip),
-                      ),
-                      SizedBox(width: 16),
-                      Expanded(
-                        flex: 2,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('串口号 (--port)', style: TextStyle(color: vsCodeBlue, fontSize: 12, fontWeight: FontWeight.bold)),
-                            SizedBox(height: 6),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Container(
-                                    height: 36,
-                                    padding: EdgeInsets.symmetric(horizontal: 8),
-                                    decoration: BoxDecoration(
-                                      border: Border.all(color: vsCodeTextSecondary.withOpacity(0.5)),
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
-                                    child: DropdownButtonHideUnderline(
-                                      child: DropdownButton<String>(
-                                        value: _port.isNotEmpty && _availablePorts.contains(_port) ? _port : null,
-                                        isExpanded: true,
-                                        dropdownColor: vsCodeSurface,
-                                        style: TextStyle(color: vsCodeText, fontSize: 13),
-                                        items: _availablePorts.map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
-                                        onChanged: (val) {
-                                          setState(() => _port = val!);
-                                        },
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                IconButton(
-                                  icon: Icon(Icons.refresh, color: vsCodeBlue, size: 20),
-                                  onPressed: _refreshPorts,
-                                  tooltip: '刷新系统设备列表',
-                                )
-                              ],
-                            )
-                          ],
-                        ),
-                      ),
-                      SizedBox(width: 16),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('附加选项', style: TextStyle(color: vsCodeBlue, fontSize: 12, fontWeight: FontWeight.bold)),
-                          SizedBox(height: 6),
-                          Row(
-                            children: [
-                              Checkbox(
-                                value: _encrypt,
-                                activeColor: vsCodeBlue,
-                                onChanged: (val) => setState(() => _encrypt = val!),
-                              ),
-                              Text('加密 (--encrypt)', style: TextStyle(color: vsCodeText, fontSize: 13)),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                  SizedBox(height: 16),
-                  Divider(color: vsCodeTextSecondary.withOpacity(0.3)),
-                  SizedBox(height: 8),
-                  _buildFileRow('Bootloader', _bootloaderAddrCtrl, _bootloaderPathCtrl),
-                  SizedBox(height: 12),
-                  _buildFileRow('Partition Table', _partitionAddrCtrl, _partitionPathCtrl),
-                  SizedBox(height: 12),
-                  _buildFileRow('ESP-NOW App', _appAddrCtrl, _appPathCtrl),
-                ],
-              ),
-            ),
-            SizedBox(height: 16),
-            // ========== 按钮区域 ==========
-            Row(
-              children: [
-                ElevatedButton.icon(
-                  icon: Icon(_isFlashing ? Icons.stop : Icons.flash_on, size: 18),
-                  label: Text(_isFlashing ? '终止烧录' : '执行烧录 (Write Flash)'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _isFlashing ? Colors.red : Colors.green,
-                    foregroundColor: Colors.white,
-                    padding: EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-                  ),
-                  onPressed: _isFlashing ? _stopFlashing : _startFlashing,
-                ),
-                SizedBox(width: 16),
-                ElevatedButton.icon(
-                  icon: Icon(Icons.delete_outline, size: 18),
-                  label: Text('清空终端'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: vsCodeSurface,
-                    foregroundColor: vsCodeText,
-                    side: BorderSide(color: vsCodeTextSecondary.withOpacity(0.5)),
-                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-                  ),
-                  onPressed: () {
-                    setState(() {
-                      _outputLog.clear();
-                    });
-                  },
-                ),
-              ],
-            ),
-            SizedBox(height: 16),
-            // ========== 日志控制台 ==========
-            Expanded(
-              child: Container(
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  border: Border.all(color: vsCodeBlue, width: 2),
-                  borderRadius: BorderRadius.circular(8),
-                  color: Colors.black, // 控制台深色背景
-                ),
-                child: Column(
-                  children: [
-                    Container(
-                      width: double.infinity,
-                      padding: EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: vsCodeBlue.withOpacity(0.1),
-                        borderRadius: BorderRadius.only(
-                          topLeft: Radius.circular(6),
-                          topRight: Radius.circular(6),
-                        ),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.terminal, color: vsCodeBlue, size: 16),
-                          SizedBox(width: 8),
-                          Text(
-                            '标准输出终端 (esptool process)',
-                            style: TextStyle(color: vsCodeBlue, fontWeight: FontWeight.bold),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Expanded(
-                      child: Scrollbar(
-                        controller: _scrollController,
-                        thumbVisibility: true,
-                        child: ListView.builder(
-                          controller: _scrollController,
-                          padding: EdgeInsets.all(12),
-                          itemCount: _outputLog.length,
-                          itemBuilder: (context, index) {
-                            String log = _outputLog[index];
-                            Color textColor = vsCodeText;
-                            
-                            // 简单基于正则上色
-                            if (log.startsWith('[ERROR]') || log.contains('failed') || log.contains('Error')) {
-                              textColor = errorColor;
-                            } else if (log.contains('成功') || log.contains('Done') || log.contains('Leaving...') || log.contains('Wrote')) {
-                              textColor = successColor;
-                            } else if (log.contains('esptool.py v5.2')) {
-                              textColor = vsCodeBlue;
-                            }
-                            
-                            return Padding(
-                              padding: const EdgeInsets.only(bottom: 4.0),
-                              child: SelectableText(
-                                log,
-                                style: TextStyle(
-                                  fontFamily: 'monospace',
-                                  fontSize: 13,
-                                  color: textColor,
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // 内部小组件
-  Widget _buildTextField(String label, Function(String) onChanged, String initValue) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: TextStyle(color: vsCodeBlue, fontSize: 12, fontWeight: FontWeight.bold)),
-        SizedBox(height: 6),
-        SizedBox(
-          height: 36,
-          child: TextFormField(
-            // 绑定 ValueKey，确保当下载完成后外部变量更新时组件会重绘
-            key: ValueKey(initValue),
-            initialValue: initValue,
-            onChanged: onChanged,
-            style: TextStyle(color: vsCodeText, fontSize: 13),
-            decoration: InputDecoration(
-              isDense: true,
-              contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              border: OutlineInputBorder(borderSide: BorderSide(color: vsCodeTextSecondary.withOpacity(0.5))),
-              enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: vsCodeTextSecondary.withOpacity(0.5))),
-              focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: vsCodeBlue)),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildFileRow(String label, TextEditingController addrCtrl, TextEditingController pathCtrl) {
-    return Row(
-      children: [
-        SizedBox(
-          width: 130,
-          child: Text(label, style: TextStyle(color: vsCodeText, fontSize: 13, fontWeight: FontWeight.bold)),
-        ),
-        SizedBox(
-          width: 100,
-          child: SizedBox(
-            height: 36,
-            child: TextField(
-              controller: addrCtrl,
-              style: TextStyle(color: successColor, fontFamily: 'monospace', fontSize: 13),
-              decoration: InputDecoration(
-                isDense: true,
-                contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                labelText: '起始地址',
-                labelStyle: TextStyle(color: vsCodeTextSecondary, fontSize: 12),
-                border: OutlineInputBorder(borderSide: BorderSide(color: vsCodeTextSecondary.withOpacity(0.5))),
-                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: vsCodeTextSecondary.withOpacity(0.5))),
-                focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: vsCodeBlue)),
-              ),
-            ),
-          ),
-        ),
-        SizedBox(width: 16),
-        Expanded(
-          child: SizedBox(
-            height: 36,
-            child: TextField(
-              controller: pathCtrl,
-              style: TextStyle(color: vsCodeText, fontSize: 13),
-              decoration: InputDecoration(
-                isDense: true,
-                contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                labelText: '文件绝对路径 (.bin)',
-                labelStyle: TextStyle(color: vsCodeTextSecondary, fontSize: 12),
-                border: OutlineInputBorder(borderSide: BorderSide(color: vsCodeTextSecondary.withOpacity(0.5))),
-                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: vsCodeTextSecondary.withOpacity(0.5))),
-                focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: vsCodeBlue)),
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
   }
 }

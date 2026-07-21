@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_libserialport/flutter_libserialport.dart';
+import 'app_theme.dart';
 import 'websocket_server.dart';
 
 class WebSocketPanel extends StatefulWidget {
@@ -19,15 +20,7 @@ class WebSocketPanel extends StatefulWidget {
 }
 
 class _WebSocketPanelState extends State<WebSocketPanel> {
-  // 颜色常量定义
-  static const Color vsCodeBackground = Color(0xFF1E1E1E);
-  static const Color vsCodeSurface = Color(0xFF252526);
-  static const Color vsCodeBlue = Color(0xFF569CD6);
-  static const Color vsCodeText = Color(0xFFD4D4D4);
-  static const Color vsCodeTextSecondary = Color(0xFF858585);
-  static const Color receiveColor = Color(0xFF4EC9B0);
-  static const Color sendColor = Color(0xFFCE9178);
-  static const Color errorColor = Color(0xFFF48771);
+  AppColors get _colors => AppColors.of(context);
 
   final List<LogEntry> _logEntries = [];
   final ScrollController _logScrollController = ScrollController();
@@ -347,7 +340,7 @@ class _WebSocketPanelState extends State<WebSocketPanel> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: vsCodeBackground,
+      color: _colors.background,
       padding: EdgeInsets.all(16.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -356,7 +349,7 @@ class _WebSocketPanelState extends State<WebSocketPanel> {
           Container(
             padding: EdgeInsets.all(16),
             decoration: BoxDecoration(
-              border: Border.all(color: vsCodeBlue, width: 2),
+              border: Border.all(color: _colors.primary, width: 2),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Column(
@@ -365,7 +358,7 @@ class _WebSocketPanelState extends State<WebSocketPanel> {
                 Text(
                   'WebSocket服务器状态',
                   style: TextStyle(
-                    color: vsCodeBlue,
+                    color: _colors.primary,
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
                   ),
@@ -377,21 +370,21 @@ class _WebSocketPanelState extends State<WebSocketPanel> {
                       child: TextField(
                         decoration: InputDecoration(
                           labelText: '服务器端口',
-                          labelStyle: TextStyle(color: vsCodeTextSecondary),
+                          labelStyle: TextStyle(color: _colors.textSecondary),
                           hintText: '例如: 9090',
-                          hintStyle: TextStyle(color: vsCodeTextSecondary),
+                          hintStyle: TextStyle(color: _colors.textSecondary),
                           filled: true,
-                          fillColor: vsCodeSurface,
+                          fillColor: _colors.surface,
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(4),
-                            borderSide: BorderSide(color: vsCodeBlue),
+                            borderSide: BorderSide(color: _colors.primary),
                           ),
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(4),
-                            borderSide: BorderSide(color: vsCodeBlue, width: 2),
+                            borderSide: BorderSide(color: _colors.primary, width: 2),
                           ),
                         ),
-                        style: TextStyle(color: vsCodeText),
+                        style: TextStyle(color: _colors.text),
                         controller: TextEditingController(text: widget.webSocketServer?.port.toString() ?? '9090'),
                         enabled: false, // 端口由主应用管理，不可编辑
                       ),
@@ -449,10 +442,10 @@ class _WebSocketPanelState extends State<WebSocketPanel> {
                 Container(
                   padding: EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: vsCodeSurface,
+                    color: _colors.surface,
                     borderRadius: BorderRadius.circular(4),
                     border: Border.all(
-                      color: vsCodeBlue,
+                      color: _colors.primary,
                       width: 1,
                     ),
                   ),
@@ -461,7 +454,7 @@ class _WebSocketPanelState extends State<WebSocketPanel> {
                       Text(
                         '客户端连接数: ${widget.webSocketServer?.getClientCount() ?? 0}',
                         style: TextStyle(
-                          color: vsCodeText,
+                          color: _colors.text,
                           fontSize: 12,
                         ),
                       ),
@@ -478,7 +471,7 @@ class _WebSocketPanelState extends State<WebSocketPanel> {
           Container(
             padding: EdgeInsets.all(16),
             decoration: BoxDecoration(
-              border: Border.all(color: vsCodeBlue, width: 2),
+              border: Border.all(color: _colors.primary, width: 2),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Column(
@@ -487,7 +480,7 @@ class _WebSocketPanelState extends State<WebSocketPanel> {
                 Text(
                   '串口控制',
                   style: TextStyle(
-                    color: vsCodeBlue,
+                    color: _colors.primary,
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
                   ),
@@ -501,21 +494,21 @@ class _WebSocketPanelState extends State<WebSocketPanel> {
                       child: TextField(
                         decoration: InputDecoration(
                           labelText: '串口号',
-                          labelStyle: TextStyle(color: vsCodeTextSecondary),
+                          labelStyle: TextStyle(color: _colors.textSecondary),
                           hintText: '例如: /dev/ttyUSB0',
-                          hintStyle: TextStyle(color: vsCodeTextSecondary),
+                          hintStyle: TextStyle(color: _colors.textSecondary),
                           filled: true,
-                          fillColor: vsCodeSurface,
+                          fillColor: _colors.surface,
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(4),
-                            borderSide: BorderSide(color: vsCodeBlue),
+                            borderSide: BorderSide(color: _colors.primary),
                           ),
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(4),
-                            borderSide: BorderSide(color: vsCodeBlue, width: 2),
+                            borderSide: BorderSide(color: _colors.primary, width: 2),
                           ),
                         ),
-                        style: TextStyle(color: vsCodeText),
+                        style: TextStyle(color: _colors.text),
                         controller: TextEditingController(text: _selectedPort),
                         onChanged: (value) => setState(() => _selectedPort = value),
                       ),
@@ -526,19 +519,19 @@ class _WebSocketPanelState extends State<WebSocketPanel> {
                       child: TextField(
                         decoration: InputDecoration(
                           labelText: '波特率',
-                          labelStyle: TextStyle(color: vsCodeTextSecondary),
+                          labelStyle: TextStyle(color: _colors.textSecondary),
                           filled: true,
-                          fillColor: vsCodeSurface,
+                          fillColor: _colors.surface,
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(4),
-                            borderSide: BorderSide(color: vsCodeBlue),
+                            borderSide: BorderSide(color: _colors.primary),
                           ),
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(4),
-                            borderSide: BorderSide(color: vsCodeBlue, width: 2),
+                            borderSide: BorderSide(color: _colors.primary, width: 2),
                           ),
                         ),
-                        style: TextStyle(color: vsCodeText),
+                        style: TextStyle(color: _colors.text),
                         controller: TextEditingController(text: _baudRate),
                         onChanged: (value) => setState(() => _baudRate = value),
                       ),
@@ -551,7 +544,7 @@ class _WebSocketPanelState extends State<WebSocketPanel> {
                         style: ElevatedButton.styleFrom(
                           backgroundColor: _isConnected ? Colors.red : Colors.green,
                           foregroundColor: Colors.white,
-                          side: BorderSide(color: vsCodeBlue, width: 1),
+                          side: BorderSide(color: _colors.primary, width: 1),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(4),
                           ),
@@ -572,9 +565,9 @@ class _WebSocketPanelState extends State<WebSocketPanel> {
                     ElevatedButton(
                       onPressed: _listPorts,
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: vsCodeSurface,
-                        foregroundColor: vsCodeBlue,
-                        side: BorderSide(color: vsCodeBlue, width: 1),
+                        backgroundColor: _colors.surface,
+                        foregroundColor: _colors.primary,
+                        side: BorderSide(color: _colors.primary, width: 1),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(4),
                         ),
@@ -585,9 +578,9 @@ class _WebSocketPanelState extends State<WebSocketPanel> {
                     ElevatedButton(
                       onPressed: () => _setHexMode(false),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: _hexMode ? vsCodeSurface : vsCodeBlue,
-                        foregroundColor: _hexMode ? vsCodeBlue : Colors.white,
-                        side: BorderSide(color: vsCodeBlue, width: 1),
+                        backgroundColor: _hexMode ? _colors.surface : _colors.primary,
+                        foregroundColor: _hexMode ? _colors.primary : Colors.white,
+                        side: BorderSide(color: _colors.primary, width: 1),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(4),
                         ),
@@ -598,9 +591,9 @@ class _WebSocketPanelState extends State<WebSocketPanel> {
                     ElevatedButton(
                       onPressed: () => _setHexMode(true),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: _hexMode ? vsCodeBlue : vsCodeSurface,
-                        foregroundColor: _hexMode ? Colors.white : vsCodeBlue,
-                        side: BorderSide(color: vsCodeBlue, width: 1),
+                        backgroundColor: _hexMode ? _colors.primary : _colors.surface,
+                        foregroundColor: _hexMode ? Colors.white : _colors.primary,
+                        side: BorderSide(color: _colors.primary, width: 1),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(4),
                         ),
@@ -611,9 +604,9 @@ class _WebSocketPanelState extends State<WebSocketPanel> {
                     ElevatedButton(
                       onPressed: () => _setChartMode(true),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: _chartMode ? vsCodeBlue : vsCodeSurface,
-                        foregroundColor: _chartMode ? Colors.white : vsCodeBlue,
-                        side: BorderSide(color: vsCodeBlue, width: 1),
+                        backgroundColor: _chartMode ? _colors.primary : _colors.surface,
+                        foregroundColor: _chartMode ? Colors.white : _colors.primary,
+                        side: BorderSide(color: _colors.primary, width: 1),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(4),
                         ),
@@ -624,9 +617,9 @@ class _WebSocketPanelState extends State<WebSocketPanel> {
                     ElevatedButton(
                       onPressed: () => _setChartMode(false),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: _chartMode ? vsCodeSurface : vsCodeBlue,
-                        foregroundColor: _chartMode ? vsCodeBlue : Colors.white,
-                        side: BorderSide(color: vsCodeBlue, width: 1),
+                        backgroundColor: _chartMode ? _colors.surface : _colors.primary,
+                        foregroundColor: _chartMode ? _colors.primary : Colors.white,
+                        side: BorderSide(color: _colors.primary, width: 1),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(4),
                         ),
@@ -646,21 +639,21 @@ class _WebSocketPanelState extends State<WebSocketPanel> {
                       child: TextField(
                         decoration: InputDecoration(
                           labelText: '发送文本',
-                          labelStyle: TextStyle(color: vsCodeTextSecondary),
+                          labelStyle: TextStyle(color: _colors.textSecondary),
                           hintText: '输入要发送的文本',
-                          hintStyle: TextStyle(color: vsCodeTextSecondary),
+                          hintStyle: TextStyle(color: _colors.textSecondary),
                           filled: true,
-                          fillColor: vsCodeSurface,
+                          fillColor: _colors.surface,
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(4),
-                            borderSide: BorderSide(color: vsCodeBlue),
+                            borderSide: BorderSide(color: _colors.primary),
                           ),
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(4),
-                            borderSide: BorderSide(color: vsCodeBlue, width: 2),
+                            borderSide: BorderSide(color: _colors.primary, width: 2),
                           ),
                         ),
-                        style: TextStyle(color: vsCodeText),
+                        style: TextStyle(color: _colors.text),
                         controller: TextEditingController(text: _sendText),
                         onChanged: (value) => setState(() => _sendText = value),
                         onSubmitted: (_) => _sendTextData(),
@@ -672,9 +665,9 @@ class _WebSocketPanelState extends State<WebSocketPanel> {
                       child: ElevatedButton(
                         onPressed: _sendTextData,
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: vsCodeSurface,
-                          foregroundColor: vsCodeBlue,
-                          side: BorderSide(color: vsCodeBlue, width: 1),
+                          backgroundColor: _colors.surface,
+                          foregroundColor: _colors.primary,
+                          side: BorderSide(color: _colors.primary, width: 1),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(4),
                           ),
@@ -693,21 +686,21 @@ class _WebSocketPanelState extends State<WebSocketPanel> {
                       child: TextField(
                         decoration: InputDecoration(
                           labelText: '发送HEX',
-                          labelStyle: TextStyle(color: vsCodeTextSecondary),
+                          labelStyle: TextStyle(color: _colors.textSecondary),
                           hintText: '输入HEX数据 (如: 48656C6C6F)',
-                          hintStyle: TextStyle(color: vsCodeTextSecondary),
+                          hintStyle: TextStyle(color: _colors.textSecondary),
                           filled: true,
-                          fillColor: vsCodeSurface,
+                          fillColor: _colors.surface,
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(4),
-                            borderSide: BorderSide(color: vsCodeBlue),
+                            borderSide: BorderSide(color: _colors.primary),
                           ),
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(4),
-                            borderSide: BorderSide(color: vsCodeBlue, width: 2),
+                            borderSide: BorderSide(color: _colors.primary, width: 2),
                           ),
                         ),
-                        style: TextStyle(color: vsCodeText),
+                        style: TextStyle(color: _colors.text),
                         controller: TextEditingController(text: _sendHex),
                         onChanged: (value) => setState(() => _sendHex = value),
                         onSubmitted: (_) => _sendHexData(),
@@ -719,9 +712,9 @@ class _WebSocketPanelState extends State<WebSocketPanel> {
                       child: ElevatedButton(
                         onPressed: _sendHexData,
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: vsCodeSurface,
-                          foregroundColor: vsCodeBlue,
-                          side: BorderSide(color: vsCodeBlue, width: 1),
+                          backgroundColor: _colors.surface,
+                          foregroundColor: _colors.primary,
+                          side: BorderSide(color: _colors.primary, width: 1),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(4),
                           ),
@@ -741,7 +734,7 @@ class _WebSocketPanelState extends State<WebSocketPanel> {
           Expanded(
             child: Container(
               decoration: BoxDecoration(
-                border: Border.all(color: vsCodeBlue, width: 2),
+                border: Border.all(color: _colors.primary, width: 2),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Column(
@@ -749,7 +742,7 @@ class _WebSocketPanelState extends State<WebSocketPanel> {
                   Container(
                     padding: EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: vsCodeBlue.withOpacity(0.1),
+                      color: _colors.primary.withOpacity(0.1),
                       borderRadius: BorderRadius.only(
                         topLeft: Radius.circular(6),
                         topRight: Radius.circular(6),
@@ -757,12 +750,12 @@ class _WebSocketPanelState extends State<WebSocketPanel> {
                     ),
                     child: Row(
                       children: [
-                        Icon(Icons.list, color: vsCodeBlue, size: 16),
+                        Icon(Icons.list, color: _colors.primary, size: 16),
                         SizedBox(width: 8),
                         Text(
                           '服务端日志',
                           style: TextStyle(
-                            color: vsCodeBlue,
+                            color: _colors.primary,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
@@ -771,7 +764,7 @@ class _WebSocketPanelState extends State<WebSocketPanel> {
                           onPressed: _clearLog,
                           child: Text(
                             '清空',
-                            style: TextStyle(color: vsCodeBlue, fontSize: 12),
+                            style: TextStyle(color: _colors.primary, fontSize: 12),
                           ),
                         ),
                       ],
@@ -786,20 +779,20 @@ class _WebSocketPanelState extends State<WebSocketPanel> {
                         itemCount: _logEntries.length,
                         itemBuilder: (context, index) {
                           final entry = _logEntries[index];
-                          Color entryColor = vsCodeText;
+                          Color entryColor = _colors.text;
 
                           switch (entry.type) {
                             case LogType.command:
-                              entryColor = sendColor;
+                              entryColor = _colors.send;
                               break;
                             case LogType.response:
-                              entryColor = receiveColor;
+                              entryColor = _colors.receive;
                               break;
                             case LogType.error:
-                              entryColor = errorColor;
+                              entryColor = _colors.error;
                               break;
                             case LogType.system:
-                              entryColor = vsCodeTextSecondary;
+                              entryColor = _colors.textSecondary;
                               break;
                           }
 
@@ -824,14 +817,14 @@ class _WebSocketPanelState extends State<WebSocketPanel> {
                                   SizedBox(height: 4),
                                   Text(
                                     '命令: ${entry.command}',
-                                    style: TextStyle(color: sendColor, fontSize: 10),
+                                    style: TextStyle(color: _colors.send, fontSize: 10),
                                   ),
                                 ],
                                 if (entry.response != null) ...[
                                   SizedBox(height: 4),
                                   Text(
                                     '响应: ${entry.response}',
-                                    style: TextStyle(color: receiveColor, fontSize: 10),
+                                    style: TextStyle(color: _colors.receive, fontSize: 10),
                                   ),
                                 ],
                               ],

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:dartssh2/dartssh2.dart';
 import 'package:xterm/xterm.dart';
+import 'app_theme.dart';
 
 /// SSH 终端视图与控制逻辑
 /// 依赖: dartssh2, xterm
@@ -13,11 +14,7 @@ class SshTerminalPage extends StatefulWidget {
 }
 
 class _SshTerminalPageState extends State<SshTerminalPage> {
-  static const Color vsCodeBackground = Color(0xFF1E1E1E);
-  static const Color vsCodeSurface = Color(0xFF252526);
-  static const Color vsCodeBlue = Color(0xFF569CD6);
-  static const Color vsCodeText = Color(0xFFD4D4D4);
-  static const Color vsCodeTextSecondary = Color(0xFF858585);
+  AppColors get _colors => AppColors.of(context);
 
   final TextEditingController _hostCtrl = TextEditingController(text: '127.0.0.1');
   final TextEditingController _portCtrl = TextEditingController(text: '22');
@@ -136,7 +133,7 @@ class _SshTerminalPageState extends State<SshTerminalPage> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(msg),
-        backgroundColor: vsCodeBlue,
+        backgroundColor: _colors.primary,
         duration: const Duration(seconds: 2),
       ),
     );
@@ -145,10 +142,10 @@ class _SshTerminalPageState extends State<SshTerminalPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: vsCodeBackground,
+      backgroundColor: _colors.background,
       appBar: AppBar(
-        title: Text('SSH 远程终端', style: TextStyle(color: vsCodeBlue)),
-        backgroundColor: vsCodeBackground,
+        title: Text('SSH 远程终端', style: TextStyle(color: _colors.primary)),
+        backgroundColor: _colors.background,
         elevation: 0,
         actions: [
           Container(
@@ -173,7 +170,7 @@ class _SshTerminalPageState extends State<SshTerminalPage> {
           Container(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             decoration: BoxDecoration(
-              border: Border(bottom: BorderSide(color: vsCodeBlue.withOpacity(0.3))),
+              border: Border(bottom: BorderSide(color: _colors.primary.withOpacity(0.3))),
             ),
             child: Row(
               children: [
@@ -188,7 +185,7 @@ class _SshTerminalPageState extends State<SshTerminalPage> {
                 ElevatedButton.icon(
                   onPressed: _isConnecting ? null : (_isConnected ? _disconnect : _connect),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: _isConnected ? Colors.red : vsCodeBlue,
+                    backgroundColor: _isConnected ? Colors.red : _colors.primary,
                     foregroundColor: Colors.white,
                     padding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                   ),
@@ -206,7 +203,7 @@ class _SshTerminalPageState extends State<SshTerminalPage> {
             child: Container(
               margin: EdgeInsets.all(16),
               decoration: BoxDecoration(
-                border: Border.all(color: vsCodeBlue.withOpacity(0.5)),
+                border: Border.all(color: _colors.primary.withOpacity(0.5)),
                 borderRadius: BorderRadius.circular(8),
                 color: Colors.black,
               ),
@@ -232,16 +229,16 @@ class _SshTerminalPageState extends State<SshTerminalPage> {
       controller: controller,
       obscureText: obscureText,
       enabled: enabled,
-      style: TextStyle(color: vsCodeText, fontSize: 13),
+      style: TextStyle(color: _colors.text, fontSize: 13),
       decoration: InputDecoration(
         labelText: label,
-        labelStyle: TextStyle(color: vsCodeTextSecondary, fontSize: 12),
+        labelStyle: TextStyle(color: _colors.textSecondary, fontSize: 12),
         isDense: true,
         contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-        border: OutlineInputBorder(borderSide: BorderSide(color: vsCodeTextSecondary.withOpacity(0.5))),
-        enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: vsCodeTextSecondary.withOpacity(0.5))),
-        focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: vsCodeBlue)),
-        disabledBorder: OutlineInputBorder(borderSide: BorderSide(color: vsCodeSurface)),
+        border: OutlineInputBorder(borderSide: BorderSide(color: _colors.textSecondary.withOpacity(0.5))),
+        enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: _colors.textSecondary.withOpacity(0.5))),
+        focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: _colors.primary)),
+        disabledBorder: OutlineInputBorder(borderSide: BorderSide(color: _colors.surface)),
       ),
     );
   }

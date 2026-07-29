@@ -207,25 +207,27 @@ class SerialPortHomePage extends StatefulWidget {
 class _SerialPortHomePageState extends State<SerialPortHomePage> {
   AppColors get _colors => AppColors.of(context);
 
-  // 串口相关变量
-  SerialPort? _serialPort;
-  SerialPortReader? _reader;
-  StreamSubscription<Uint8List>? _subscription;
+  // 多串口管理相关变量
+  int _nextPortIndex = 0;
+  Map<String, PortConnection> _portConnections = {};
+  
+  int get _connectedPortCount => _portConnections.values.where((p) => p.isConnected).length;
 
-  // 配置参数状态
-  String selectedPort = '';
-  String selectedBaudRate = '9600';
-  String selectedDataBits = '8';
-  String selectedStopBits = '1';
-  String selectedParity = '无校验';
+  // 全局配置参数（应用于新连接的端口）
+  String globalBaudRate = '9600';
+  String globalDataBits = '8';
+  String globalStopBits = '1';
+  String globalParity = '无校验';
   bool hexMode = false;
   bool chartMode = false;
   String inputData = "";
-  bool isConnected = false;
-  bool _isAttemptingConnection = false;
-  bool _autoReconnect = false;
-  Timer? _reconnectTimer;
+  String selectedSendPort = '';  // 发送数据的目标串口
   bool showTimestamp = true;
+  bool _monitorAllPorts = true;
+  String _selectedMonitorPort = '';
+  ConnectionMode _connectionMode = ConnectionMode.all;
+  Set<String> _groupPorts = {};
+  String _singleConnectPort = '';
 
   // 可用串口列表
   List<String> availablePorts = [];
@@ -236,9 +238,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   final ScrollController _receiveScrollController = ScrollController();
   final int _maxDisplayLines = 1000;
 
-  // 数据包重组相关变量
-  final StringBuffer _dataBuffer = StringBuffer();
-  Timer? _dataTimeoutTimer;
+  // 数据包重组相关参数
   final int _packetTimeout = 50;
   final int _maxBufferLength = 1024;
 
@@ -272,21 +272,18 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   void initState() {
     super.initState();
     _refreshPortList();
-    _addLine("等待接收数据...", LineType.system);
+    _addLine("多串口监控就绪，点击\"连接所有\"或单独连接串口", LineType.system);
     _receiveScrollController.addListener(_scrollListener);
     _initWebSocketServer();
   }
 
   @override
   void dispose() {
-    _autoReconnect = false;
-    _reconnectTimer?.cancel();
-    _subscription?.cancel();
-    _reader?.close();
-    _serialPort?.close();
-    _serialPort?.dispose();
-    _dataTimeoutTimer?.cancel();
-    _dataBuffer.clear();
+    for (var conn in _portConnections.values) {
+      conn.autoReconnect = false;
+      conn.dispose();
+    }
+    _portConnections.clear();
     _receiveScrollController.dispose();
     _stopWebSocketServer();
     super.dispose();
@@ -375,32 +372,28 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
     int stopBits = data['stopBits'] ?? 1;
     String parity = data['parity'] ?? 'none';
 
-    if (port.isEmpty) {
-      _webSocketServer!.sendResponse(WebSocketResponseType.error, {
-        'command': 'connect',
-        'error': '串口未指定',
-        'code': 4002
-      });
-      return;
-    }
-
-    // 更新UI状态
+    // 更新全局配置
     setState(() {
-      selectedPort = port;
-      selectedBaudRate = baudRate.toString();
-      selectedDataBits = dataBits.toString();
-      selectedStopBits = stopBits.toString();
-      selectedParity = _convertParityToString(parity);
+      globalBaudRate = baudRate.toString();
+      globalDataBits = dataBits.toString();
+      globalStopBits = stopBits.toString();
+      globalParity = _convertParityToString(parity);
     });
 
-    // 尝试连接串口
-    _connect(manual: true);
+    if (port.isEmpty || port == '*') {
+      // 连接所有可用串口
+      _connectAllPorts();
+    } else {
+      // 连接指定串口
+      _connectPort(port);
+    }
 
     // 发送响应
+    bool anyConnected = _connectedPortCount > 0;
     _webSocketServer!.sendResponse(WebSocketResponseType.commandResponse, {
       'command': 'connect',
-      'success': isConnected,
-      'message': isConnected ? '串口连接成功' : '串口连接失败',
+      'success': anyConnected,
+      'message': anyConnected ? '串口连接成功' : '串口连接失败',
       'port': port,
       'baudRate': baudRate
     });
@@ -411,12 +404,18 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
 
   // 处理断开连接命令
   void _handleWebSocketDisconnectCommand(Map<String, dynamic> data) {
-    _disconnect();
+    String port = data['port'] ?? '';
+    
+    if (port.isEmpty || port == '*') {
+      _disconnectAllPorts();
+    } else {
+      _disconnectPort(port);
+    }
 
     _webSocketServer!.sendResponse(WebSocketResponseType.commandResponse, {
       'command': 'disconnect',
       'success': true,
-      'message': '串口已断开'
+      'message': port.isEmpty ? '所有串口已断开' : '串口 $port 已断开'
     });
 
     _sendPortStatus();
@@ -448,29 +447,28 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   void _handleWebSocketSetConfigCommand(Map<String, dynamic> data) {
     if (data.containsKey('baudRate')) {
       setState(() {
-        selectedBaudRate = data['baudRate'].toString();
+        globalBaudRate = data['baudRate'].toString();
       });
     }
     if (data.containsKey('dataBits')) {
       setState(() {
-        selectedDataBits = data['dataBits'].toString();
+        globalDataBits = data['dataBits'].toString();
       });
     }
     if (data.containsKey('stopBits')) {
       setState(() {
-        selectedStopBits = data['stopBits'].toString();
+        globalStopBits = data['stopBits'].toString();
       });
     }
     if (data.containsKey('parity')) {
       setState(() {
-        selectedParity = _convertParityToString(data['parity']);
+        globalParity = _convertParityToString(data['parity']);
       });
     }
 
     // 如果串口已连接，重新连接以应用新配置
-    if (isConnected) {
-      _addLine("配置变更，正在重启串口...", LineType.system);
-      _handleDisconnect(); // 触发自动重连逻辑
+    if (_connectedPortCount > 0) {
+      _addLine("配置变更，请在串口列表中单独重连", LineType.system);
     }
 
     _webSocketServer!.sendResponse(WebSocketResponseType.commandResponse, {
@@ -478,10 +476,10 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
       'success': true,
       'message': '配置已更新',
       'config': {
-        'baudRate': selectedBaudRate,
-        'dataBits': selectedDataBits,
-        'stopBits': selectedStopBits,
-        'parity': selectedParity
+        'baudRate': globalBaudRate,
+        'dataBits': globalDataBits,
+        'stopBits': globalStopBits,
+        'parity': globalParity
       }
     });
   }
@@ -520,8 +518,11 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   void _handleWebSocketRawDataReceived(String data) {
     _addLine("WebSocket接收: $data", LineType.system);
     
-    // 如果串口已连接，将WebSocket数据转发到串口
-    if (isConnected && _serialPort != null) {
+    // 如果串口已连接，将WebSocket数据转发到所有已连接串口
+    List<PortConnection> targets = _portConnections.values.where((p) => p.isConnected && p.serialPort != null).toList();
+    if (targets.isEmpty) return;
+
+    for (var conn in targets) {
       try {
         Uint8List dataToSend;
         if (hexMode) {
@@ -538,27 +539,40 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
           dataToSend = Uint8List.fromList(utf8.encode(data + '\r\n'));
         }
 
-        _serialPort!.write(dataToSend);
+        conn.serialPort!.write(dataToSend);
       } catch (e) {
-        _addLine("转发WebSocket数据到串口失败: $e", LineType.system);
+        _addLine("转发WebSocket数据到${conn.portName}失败: $e", LineType.system);
       }
     }
   }
 
   // 发送串口状态
   void _sendPortStatus() {
+    List<Map<String, dynamic>> ports = _portConnections.values.where((p) => p.isConnected).map((p) {
+      return {
+        'portName': p.portName,
+        'portIndex': p.index,
+        'baudRate': int.tryParse(p.baudRate) ?? 9600,
+      };
+    }).toList();
     _webSocketServer!.sendResponse(WebSocketResponseType.portStatus, {
-      'connected': isConnected,
-      'port': selectedPort,
-      'baudRate': int.tryParse(selectedBaudRate) ?? 9600,
+      'connected': _connectedPortCount > 0,
+      'ports': ports,
       'hexMode': hexMode,
       'chartMode': chartMode
     });
   }
 
-  // 发送文本数据
-  void _sendTextData(String message) {
-    if (!isConnected || _serialPort == null) {
+  // 发送文本数据到所有已连接串口
+  void _sendTextData(String message, {String port = ''}) {
+    List<PortConnection> targets;
+    if (port.isNotEmpty && _portConnections.containsKey(port)) {
+      targets = [_portConnections[port]!];
+    } else {
+      targets = _portConnections.values.where((p) => p.isConnected && p.serialPort != null).toList();
+    }
+
+    if (targets.isEmpty) {
       _webSocketServer!.sendResponse(WebSocketResponseType.error, {
         'command': 'send_text',
         'error': '串口未连接',
@@ -567,37 +581,41 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
       return;
     }
 
-    try {
-      Uint8List dataToSend = Uint8List.fromList(utf8.encode(message + '\r\n'));
-      final bytesWritten = _serialPort!.write(dataToSend);
-
-      if (bytesWritten == dataToSend.length) {
-        _addLine(message, LineType.send);
-        _webSocketServer!.sendResponse(WebSocketResponseType.commandResponse, {
-          'command': 'send_text',
-          'success': true,
-          'message': '数据发送成功',
-          'bytesWritten': bytesWritten
-        });
-      } else {
-        _webSocketServer!.sendResponse(WebSocketResponseType.error, {
-          'command': 'send_text',
-          'error': '数据发送不完整',
-          'code': 4004
-        });
+    bool allSuccess = true;
+    for (var conn in targets) {
+      try {
+        Uint8List dataToSend = Uint8List.fromList(utf8.encode(message + '\r\n'));
+        final bytesWritten = conn.serialPort!.write(dataToSend);
+        if (bytesWritten == dataToSend.length) {
+          _addLine(message, LineType.send);
+        } else {
+          allSuccess = false;
+        }
+      } catch (e) {
+        allSuccess = false;
       }
-    } catch (e) {
+    }
+
+    if (allSuccess) {
+      _webSocketServer!.sendResponse(WebSocketResponseType.commandResponse, {
+        'command': 'send_text',
+        'success': true,
+        'message': '数据发送成功',
+      });
+    } else {
       _webSocketServer!.sendResponse(WebSocketResponseType.error, {
         'command': 'send_text',
-        'error': '发送失败: $e',
-        'code': 4005
+        'error': '部分数据发送失败',
+        'code': 4004
       });
     }
   }
 
-  // 发送HEX数据
+  // 发送HEX数据到所有已连接串口
   void _sendHexData(String hexString) {
-    if (!isConnected || _serialPort == null) {
+    List<PortConnection> targets = _portConnections.values.where((p) => p.isConnected && p.serialPort != null).toList();
+
+    if (targets.isEmpty) {
       _webSocketServer!.sendResponse(WebSocketResponseType.error, {
         'command': 'send_hex',
         'error': '串口未连接',
@@ -624,18 +642,31 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
       }
       Uint8List dataToSend = Uint8List.fromList(dataList);
 
-      final bytesWritten = _serialPort!.write(dataToSend);
+      bool allSuccess = true;
+      for (var conn in targets) {
+        try {
+          final bytesWritten = conn.serialPort!.write(dataToSend);
+          if (bytesWritten == dataToSend.length) {
+            String displayHex = cleanedData
+                .replaceAllMapped(RegExp(r'.{2}'), (match) => '${match.group(0)} ')
+                .trim();
+            _addLine('HEX: $displayHex', LineType.send);
+          } else {
+            allSuccess = false;
+          }
+        } catch (e) {
+          allSuccess = false;
+        }
+      }
 
-      if (bytesWritten == dataToSend.length) {
+      if (allSuccess) {
         String displayHex = cleanedData
             .replaceAllMapped(RegExp(r'.{2}'), (match) => '${match.group(0)} ')
             .trim();
-        _addLine('HEX: $displayHex', LineType.send);
         _webSocketServer!.sendResponse(WebSocketResponseType.commandResponse, {
           'command': 'send_hex',
           'success': true,
           'message': 'HEX数据发送成功',
-          'bytesWritten': bytesWritten,
           'hex': displayHex
         });
       } else {
@@ -683,9 +714,10 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   }
 
   // 将串口数据发送到WebSocket客户端
-  void _sendToWebSocket(String data) {
+  void _sendToWebSocket(String data, {int? portIndex}) {
     if (_webSocketServer != null && _isWebSocketServerRunning) {
-      _webSocketServer!.broadcast(data);
+      String prefix = portIndex != null ? '[$portIndex] ' : '';
+      _webSocketServer!.broadcast('$prefix$data');
     }
   }
 
@@ -726,107 +758,175 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   void _refreshPortList() {
     setState(() {
       availablePorts = SerialPort.availablePorts;
-      if (availablePorts.isNotEmpty && selectedPort.isEmpty) {
-        selectedPort = availablePorts.first;
+      if (_singleConnectPort.isEmpty && availablePorts.isNotEmpty) {
+        _singleConnectPort = availablePorts.first;
       }
     });
   }
 
-  void _connect({bool manual = true}) async {
-    if (selectedPort.isEmpty) {
-      if (manual) _showMessage('请选择串口');
-      return;
+  void _connectPort(String portName, {bool manual = true}) {
+    if (portName.isEmpty) return;
+
+    PortConnection? existing = _portConnections[portName];
+    if (existing != null && existing.isConnected) return;
+
+    int index = existing?.index ?? _nextPortIndex;
+    Color color = existing?.color ?? portColors[index % portColors.length];
+
+    if (existing == null) {
+      _nextPortIndex = index + 1;
     }
 
-    if (manual) _autoReconnect = true;
+    PortConnection conn = existing ?? PortConnection(
+      portName: portName,
+      index: index,
+      color: color,
+      baudRate: globalBaudRate,
+      dataBits: globalDataBits,
+      stopBits: globalStopBits,
+      parity: globalParity,
+    );
+
+    if (manual) conn.autoReconnect = true;
 
     try {
-      _serialPort = SerialPort(selectedPort);
+      conn.serialPort = SerialPort(portName);
 
-      if (!_serialPort!.openReadWrite()) {
-        _handleDisconnect();
+      if (!conn.serialPort!.openReadWrite()) {
+        _addLine("[!] $portName 被占用或无法打开，已跳过", LineType.system);
+        conn.dispose();
         return;
       }
 
-      // 获取配置对象并设置参数[6](@ref)
-      final config = _serialPort!.config;
-      config.baudRate = int.parse(selectedBaudRate);
-      config.bits = int.parse(selectedDataBits);
-      config.parity = _getParityValue(selectedParity);
-      config.stopBits = int.parse(selectedStopBits);
+      final config = conn.serialPort!.config;
+      config.baudRate = int.parse(conn.baudRate);
+      config.bits = int.parse(conn.dataBits);
+      config.parity = _getParityValue(conn.parity);
+      config.stopBits = int.parse(conn.stopBits);
+      conn.serialPort!.config = config;
 
-      // 将配置应用回串口[6](@ref)
-      _serialPort!.config = config;
-
-      _reader = SerialPortReader(_serialPort!, timeout: 10);
-      _subscription = _reader!.stream.listen(
-        _onDataReceived,
-        onError: (e) => _handleDisconnect(),
-        onDone: () => _handleDisconnect(),
+      conn.reader = SerialPortReader(conn.serialPort!, timeout: 10);
+      conn.subscription = conn.reader!.stream.listen(
+        (data) => _onPortDataReceived(portName, data),
+        onError: (e) => _handlePortDisconnect(portName),
+        onDone: () => _handlePortDisconnect(portName),
       );
 
-      setState(() {
-        isConnected = true;
-        _isAttemptingConnection = false;
-      });
+      conn.isConnected = true;
+      _portConnections[portName] = conn;
+
+      if (selectedSendPort.isEmpty) {
+        selectedSendPort = portName;
+      }
 
       _addLine(
-        "串口连接成功 - $selectedBaudRate $selectedDataBits$selectedParity$selectedStopBits",
+        "[${conn.index}] $portName 连接成功 - ${conn.baudRate} ${conn.dataBits}${conn.parity}${conn.stopBits}",
         LineType.system,
       );
+
+      setState(() {});
     } catch (e) {
-      _handleDisconnect();
+      String err = e.toString().toLowerCase();
+      if (err.contains('access') || err.contains('denied') || err.contains('busy') || 
+          err.contains('occupied') || err.contains('in use') || err.contains('permission') ||
+          err.contains('already open') || err.contains('被占用') || err.contains('无法打开')) {
+        _addLine("[!] $portName ${manual ? '被占用，已跳过' : '无法连接'}", LineType.system);
+      } else {
+        _addLine("[!] $portName 连接失败: $e", LineType.system);
+      }
+      conn.dispose();
     }
   }
 
-  void _handleDisconnect() {
-    _subscription?.cancel();
-    _reader?.close();
-    _serialPort?.close();
+  void _connectAllPorts({bool skipOccupied = true}) {
+    if (availablePorts.isEmpty) {
+      _showMessage('没有检测到可用串口');
+      return;
+    }
+    _addLine("正在连接所有可用串口 (${availablePorts.length}个)...", LineType.system);
+    for (String port in availablePorts) {
+      _connectPort(port, manual: true);
+    }
+    int connected = _connectedPortCount;
+    int skipped = availablePorts.length - connected;
+    if (skipped > 0) {
+      _addLine("连接完成: $connected 个成功, $skipped 个被占用/跳过", LineType.system);
+    } else {
+      _addLine("连接完成: $connected 个串口已全部连接", LineType.system);
+    }
+  }
+
+  void _handlePortDisconnect(String portName) {
+    PortConnection? conn = _portConnections[portName];
+    if (conn == null) return;
+
+    conn.subscription?.cancel();
+    conn.subscription = null;
+    conn.reader?.close();
+    conn.reader = null;
+    conn.serialPort?.close();
 
     if (mounted) {
       setState(() {
-        isConnected = false;
-        if (_autoReconnect) {
-          _isAttemptingConnection = true;
-          _reconnectTimer?.cancel();
-          _reconnectTimer = Timer(Duration(milliseconds: 10), () => _connect(manual: false));
+        if (conn.autoReconnect) {
+          conn.reconnectTimer?.cancel();
+          conn.reconnectTimer = Timer(Duration(milliseconds: 10), () => _connectPort(portName, manual: false));
+        } else {
+          conn.isConnected = false;
+          conn.serialPort?.dispose();
+          conn.serialPort = null;
         }
       });
     }
   }
 
-  void _disconnect() {
-    _autoReconnect = false;
-    _reconnectTimer?.cancel();
-    _handleDisconnect();
-    _addLine("串口已断开", LineType.system);
+  void _disconnectPort(String portName) {
+    PortConnection? conn = _portConnections[portName];
+    if (conn == null) return;
+    conn.autoReconnect = false;
+    conn.reconnectTimer?.cancel();
+    conn.dispose();
+
+    if (selectedSendPort == portName) {
+      var connected = _portConnections.values.where((p) => p.isConnected).toList();
+      selectedSendPort = connected.isNotEmpty ? connected.first.portName : '';
+    }
+
+    setState(() {
+      _portConnections.remove(portName);
+    });
+    _addLine("$portName 已断开", LineType.system);
   }
 
-  void _onDataReceived(Uint8List data) {
-    if (data.isEmpty) return;
+  void _disconnectAllPorts() {
+    for (String portName in _portConnections.keys.toList()) {
+      _disconnectPort(portName);
+    }
+  }
+
+  void _onPortDataReceived(String portName, Uint8List data) {
+    PortConnection? conn = _portConnections[portName];
+    if (conn == null || data.isEmpty) return;
 
     try {
-      // 改进的数据解码逻辑[8](@ref)
       String dataString = _tryMultipleDecodings(data);
-      _dataBuffer.write(dataString);
+      conn.dataBuffer.write(dataString);
 
-      _dataTimeoutTimer?.cancel();
-      _dataTimeoutTimer = Timer(
+      conn.dataTimeoutTimer?.cancel();
+      conn.dataTimeoutTimer = Timer(
         Duration(milliseconds: _packetTimeout),
-        _processBufferedData,
+        () => _processPortBufferedData(portName),
       );
 
-      if (_dataBuffer.length > _maxBufferLength) {
-        _processBufferedData();
+      if (conn.dataBuffer.length > _maxBufferLength) {
+        _processPortBufferedData(portName);
       }
     } catch (e) {
-      // HEX显示作为备选方案
       String hexString = data
           .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
           .join(' ')
           .toUpperCase();
-      _addLine("HEX: $hexString", LineType.receive);
+      _displayReceivedData(hexString, portIndex: conn.index);
     }
   }
 
@@ -1063,13 +1163,14 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
     return result;
   }
 
-  // 添加增强的数据行
-  void _addEnhancedLine(List<DataSegment> segments, LineType lineType) {
+  // 添加增强的数据行（支持portIndex）
+  void _addEnhancedLine(List<DataSegment> segments, LineType lineType, {int? portIndex}) {
     setState(() {
       _receivedEnhancedLines.add(EnhancedDataLine(
         segments: segments,
         lineType: lineType,
         timestamp: showTimestamp ? DateTime.now() : null,
+        portIndex: portIndex,
       ));
       
       if (_receivedEnhancedLines.length > _maxDisplayLines) {
@@ -1116,18 +1217,19 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
     return dataList;
   }
 
-  void _processBufferedData() {
-    if (_dataBuffer.isEmpty) return;
+  void _processPortBufferedData(String portName) {
+    PortConnection? conn = _portConnections[portName];
+    if (conn == null || conn.dataBuffer.isEmpty) return;
 
-    String bufferedData = _dataBuffer.toString();
-    _dataBuffer.clear();
+    String bufferedData = conn.dataBuffer.toString();
+    conn.dataBuffer.clear();
 
     List<String> lines = _splitDataLines(bufferedData);
 
     for (String line in lines) {
       if (line.trim().isEmpty) continue;
 
-      _displayReceivedData(line);
+      _displayReceivedData(line, portIndex: conn.index);
 
       if (chartMode) {
         _parseChartData(line);
@@ -1183,7 +1285,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
     } catch (e) {}
   }
 
-  void _displayReceivedData(String dataString) {
+  void _displayReceivedData(String dataString, {int? portIndex}) {
     if (dataString.isEmpty) return;
     
     // 只有在HEX模式下才进行特殊处理，否则直接显示原始数据
@@ -1196,19 +1298,25 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
       
       // 使用智能分割算法处理混合数据
       List<DataSegment> segments = _splitTextAndHex(convertedString);
-      _addEnhancedLine(segments, LineType.receive);
-      _sendToWebSocket(convertedString); // 将数据发送到WebSocket客户端
+      _addEnhancedLine(segments, LineType.receive, portIndex: portIndex);
+      _sendToWebSocket(convertedString, portIndex: portIndex);
     } else {
       // 非HEX模式下，直接处理原始数据，保留中文字符
       List<DataSegment> segments = _splitTextAndHex(dataString);
-      _addEnhancedLine(segments, LineType.receive);
-      _sendToWebSocket(dataString); // 将数据发送到WebSocket客户端
+      _addEnhancedLine(segments, LineType.receive, portIndex: portIndex);
+      _sendToWebSocket(dataString, portIndex: portIndex);
     }
   }
 
   void _sendData() {
-    if (!isConnected || _serialPort == null) {
-      _showMessage('请先连接串口');
+    if (selectedSendPort.isEmpty || !_portConnections.containsKey(selectedSendPort)) {
+      _showMessage('请先选择发送目标串口');
+      return;
+    }
+
+    PortConnection conn = _portConnections[selectedSendPort]!;
+    if (!conn.isConnected || conn.serialPort == null) {
+      _showMessage('串口 ${conn.portName} 未连接');
       return;
     }
 
@@ -1237,13 +1345,13 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
         dataToSend = Uint8List.fromList(utf8.encode(inputData + '\r\n'));
       }
 
-      final bytesWritten = _serialPort!.write(dataToSend);
+      final bytesWritten = conn.serialPort!.write(dataToSend);
 
       if (bytesWritten == dataToSend.length) {
         // 发送数据时，同时添加到增强数据行列表以确保一致的显示
         List<DataSegment> segments = _splitTextAndHex(inputData);
-        _addEnhancedLine(segments, LineType.send);
-        _sendToWebSocket(inputData); // 将发送的数据也广播到WebSocket客户端
+        _addEnhancedLine(segments, LineType.send, portIndex: conn.index);
+        _sendToWebSocket(inputData, portIndex: conn.index);
         setState(() {
           inputData = '';
         });
@@ -1281,9 +1389,13 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
     // 添加页面标题
     allContent.writeln('=== 串口通信页面内容 ===');
     allContent.writeln('时间: ${DateTime.now()}');
-    allContent.writeln('连接状态: ${isConnected ? "已连接" : (_autoReconnect ? "重连中..." : "未连接")}');
-    allContent.writeln('串口: $selectedPort');
-    allContent.writeln('配置: ${selectedBaudRate} ${selectedDataBits}${selectedParity}${selectedStopBits}');
+    allContent.writeln('连接端口数: $_connectedPortCount');
+    if (_portConnections.isNotEmpty) {
+      allContent.writeln('已连接串口:');
+      for (var conn in _portConnections.values.where((p) => p.isConnected)) {
+        allContent.writeln('  [${conn.index}] ${conn.portName} - ${conn.baudRate} ${conn.dataBits}${conn.parity}${conn.stopBits}');
+      }
+    }
     allContent.writeln('模式: ${hexMode ? "HEX模式" : "文本模式"} ${chartMode ? "图表模式" : ""}');
     allContent.writeln();
     
@@ -1395,13 +1507,13 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
             margin: EdgeInsets.all(8),
             padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
-              color: isConnected 
+              color: _connectedPortCount > 0 
                   ? Colors.green 
-                  : (_autoReconnect ? Colors.orange : Colors.red),
+                  : Colors.red,
               borderRadius: BorderRadius.circular(12),
             ),
             child: Text(
-              isConnected ? '已连接' : (_autoReconnect ? '重连中...' : '未连接'),
+              _connectedPortCount > 0 ? '已连 $_connectedPortCount' : '未连接',
               style: TextStyle(color: Colors.white, fontSize: 12),
             ),
           ),
@@ -1434,6 +1546,13 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   }
 
   Widget _buildDataDisplayArea() {
+    final displayLines = _monitorAllPorts || _selectedMonitorPort.isEmpty
+        ? _receivedEnhancedLines
+        : _receivedEnhancedLines.where((l) {
+            int? targetIndex = _portConnections[_selectedMonitorPort]?.index;
+            return targetIndex == null || l.portIndex == null || l.portIndex == targetIndex;
+          }).toList();
+    final filteredCount = displayLines.length;
     return Container(
       height: 250,
       decoration: BoxDecoration(
@@ -1456,7 +1575,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
                 Icon(Icons.input, color: _colors.primary, size: 16),
                 SizedBox(width: 8),
                 Text(
-                  '接收的数据 (${_receivedLines.length} 行)',
+                  '接收的数据 ($filteredCount 行)',
                   style: TextStyle(
                     color: _colors.primary,
                     fontWeight: FontWeight.bold,
@@ -1465,6 +1584,26 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
                 Spacer(),
                 Row(
                   children: [
+                    // 各串口颜色图例
+                    ..._portConnections.values.where((p) => p.isConnected).map((conn) {
+                      return Padding(
+                        padding: EdgeInsets.only(right: 8),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 10, height: 10,
+                              color: conn.color,
+                              margin: EdgeInsets.only(right: 2),
+                            ),
+                            Text(
+                              '[${conn.index}]',
+                              style: TextStyle(color: conn.color, fontSize: 10),
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
                     Container(
                       width: 10,
                       height: 10,
@@ -1512,13 +1651,9 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
               thumbVisibility: true,
               child: ListView.builder(
                 controller: _receiveScrollController,
-                itemCount: _receivedEnhancedLines.isNotEmpty ? _receivedEnhancedLines.length : _receivedLines.length,
+                itemCount: filteredCount,
                 itemBuilder: (context, index) {
-                  if (_receivedEnhancedLines.isNotEmpty) {
-                    return _buildEnhancedDataLine(_receivedEnhancedLines[index], index);
-                  } else {
-                    return _buildDataLine(_receivedLines[index], index);
-                  }
+                  return _buildEnhancedDataLine(displayLines[index], index);
                 },
               ),
             ),
@@ -1556,36 +1691,42 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
 
   Widget _buildEnhancedDataLine(EnhancedDataLine dataLine, int index) {
     Color textColor = _colors.text;
-    
-    switch (dataLine.lineType) {
-      case LineType.send:
-        textColor = _colors.send;
-        break;
-      case LineType.receive:
-        textColor = _colors.receive;
-        break;
-      case LineType.system:
-        textColor = _colors.textSecondary;
-        break;
+
+    // 使用端口特定颜色
+    if (dataLine.portIndex != null) {
+      textColor = portColors[dataLine.portIndex! % portColors.length];
+    } else {
+      switch (dataLine.lineType) {
+        case LineType.send:
+          textColor = _colors.send;
+          break;
+        case LineType.receive:
+          textColor = _colors.receive;
+          break;
+        case LineType.system:
+          textColor = _colors.textSecondary;
+          break;
+      }
     }
-    
-    // 构建时间戳前缀
+
+    // 构建时间戳前缀（含端口号）
     String timePrefix = '';
     if (dataLine.timestamp != null && showTimestamp) {
       String timeStr = dataLine.timestamp!.toString().substring(11, 19);
+      String portStr = dataLine.portIndex != null ? '[${dataLine.portIndex}] ' : '';
       switch (dataLine.lineType) {
         case LineType.send:
-          timePrefix = '$timeStr 发送: ';
+          timePrefix = '$timeStr ${portStr}发送: ';
           break;
         case LineType.receive:
-          timePrefix = '$timeStr 接收: ';
+          timePrefix = '$timeStr ${portStr}接收: ';
           break;
         case LineType.system:
           timePrefix = '$timeStr ';
           break;
       }
     }
-    
+
     return Container(
       width: double.infinity,
       padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -1890,6 +2031,11 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   }
 
   Widget _buildConfigPanel() {
+    final connectedPorts = _portConnections.values.where((p) => p.isConnected).toList();
+    final monitorPortNames = connectedPorts.map((p) => p.portName).toList();
+    if (!monitorPortNames.contains(_selectedMonitorPort)) {
+      _selectedMonitorPort = monitorPortNames.isNotEmpty ? monitorPortNames.first : '';
+    }
     return Container(
       width: 250,
       decoration: BoxDecoration(
@@ -1901,30 +2047,41 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _buildConnectionButton(),
-            SizedBox(height: 20),
-            _buildConfigItem('串口号', selectedPort, availablePorts),
+            // 连接/断开所有按钮
+            _buildConnectionButtons(),
+            SizedBox(height: 16),
+
+            // 串口列表
+            Text('串口列表', style: TextStyle(color: _colors.primary, fontSize: 12, fontWeight: FontWeight.bold)),
+            SizedBox(height: 8),
+            ...availablePorts.map((port) => _buildPortItem(port)),
+
+            SizedBox(height: 16),
+
+            // 监控模式切换
+            _buildMonitorToggle(),
             SizedBox(height: 12),
-            _buildConfigItem('波特率', selectedBaudRate, [
-              '4800',
-              '9600',
-              '19200',
-              '38400',
-              '57600',
-              '115200',
+
+            // 单口监控选择
+            if (!_monitorAllPorts && monitorPortNames.length > 1)
+              _buildConfigItem('监视端口', _selectedMonitorPort, monitorPortNames),
+
+            SizedBox(height: 12),
+
+            // 连接目标
+            _buildConnectionTargetSelector(),
+            SizedBox(height: 12),
+
+            // 全局配置
+            _buildConfigItem('波特率', globalBaudRate, [
+              '4800', '9600', '19200', '38400', '57600', '115200',
             ]),
             SizedBox(height: 12),
-            _buildConfigItem('数据位', selectedDataBits, ['5', '6', '7', '8']),
+            _buildConfigItem('数据位', globalDataBits, ['5', '6', '7', '8']),
             SizedBox(height: 12),
-            _buildConfigItem('停止位', selectedStopBits, ['1', '1.5', '2']),
+            _buildConfigItem('停止位', globalStopBits, ['1', '1.5', '2']),
             SizedBox(height: 12),
-            _buildConfigItem('校验码', selectedParity, [
-              '无校验',
-              '奇校验',
-              '偶校验',
-              '标记',
-              '空格',
-            ]),
+            _buildConfigItem('校验码', globalParity, ['无校验', '奇校验', '偶校验', '标记', '空格']),
             SizedBox(height: 12),
             _buildHexModeToggle(),
             SizedBox(height: 12),
@@ -1937,25 +2094,262 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
     );
   }
 
-  Widget _buildConnectionButton() {
+  Widget _buildConnectionButtons() {
+    final hasConnections = _connectedPortCount > 0;
+    return Row(
+      children: [
+        Expanded(
+          child: ElevatedButton(
+            onPressed: hasConnections ? _performDisconnectByMode : _performConnectByMode,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: hasConnections ? Colors.red : Colors.green,
+              foregroundColor: Colors.white,
+              padding: EdgeInsets.symmetric(vertical: 8),
+              side: BorderSide(
+                color: hasConnections ? Colors.red.shade300 : Colors.green.shade300,
+                width: 2,
+              ),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(hasConnections ? Icons.close : Icons.usb, size: 16),
+                SizedBox(width: 6),
+                Text(hasConnections ? '断开连接' : '连接', style: TextStyle(fontSize: 12)),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _performConnectByMode() {
+    switch (_connectionMode) {
+      case ConnectionMode.all:
+        _connectAllPorts();
+        break;
+      case ConnectionMode.group:
+        if (_groupPorts.isEmpty) {
+          _showMessage('请先在串口列表中勾选要连接的端口');
+          return;
+        }
+        for (String port in _groupPorts) {
+          _connectPort(port);
+        }
+        break;
+      case ConnectionMode.single:
+        if (_singleConnectPort.isEmpty || !availablePorts.contains(_singleConnectPort)) {
+          _showMessage('请选择要连接的串口');
+          return;
+        }
+        _connectPort(_singleConnectPort);
+        break;
+    }
+  }
+
+  void _performDisconnectByMode() {
+    switch (_connectionMode) {
+      case ConnectionMode.all:
+        _disconnectAllPorts();
+        break;
+      case ConnectionMode.group:
+        if (_groupPorts.isEmpty) {
+          _disconnectAllPorts();
+          return;
+        }
+        for (String port in _groupPorts) {
+          _disconnectPort(port);
+        }
+        break;
+      case ConnectionMode.single:
+        if (_singleConnectPort.isNotEmpty && _portConnections.containsKey(_singleConnectPort)) {
+          _disconnectPort(_singleConnectPort);
+        } else {
+          _disconnectAllPorts();
+        }
+        break;
+    }
+  }
+
+  Widget _buildPortItem(String portName) {
+    PortConnection? conn = _portConnections[portName];
+    bool isPortConnected = conn?.isConnected ?? false;
+    Color portColor = conn?.color ?? Colors.grey;
+    int? portIndex = conn?.index;
+    bool inGroup = _groupPorts.contains(portName);
+
     return Container(
-      width: double.infinity,
-      child: ElevatedButton(
-        onPressed: isConnected ? _disconnect : _connect,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: isConnected ? Colors.red : Colors.green,
-          foregroundColor: Colors.white,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+      margin: EdgeInsets.only(bottom: 4),
+      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        border: Border.all(
+          color: isPortConnected ? portColor : _colors.textSecondary.withOpacity(0.3),
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(isConnected ? Icons.close : Icons.usb, size: 16),
-            SizedBox(width: 6),
-            Text(isConnected ? '断开连接' : '连接串口'),
-          ],
-        ),
+        borderRadius: BorderRadius.circular(4),
       ),
+      child: Row(
+        children: [
+          // 分组模式下显示复选框
+          if (_connectionMode == ConnectionMode.group && !isPortConnected)
+            GestureDetector(
+              onTap: () {
+                setState(() {
+                  if (inGroup) {
+                    _groupPorts.remove(portName);
+                  } else {
+                    _groupPorts.add(portName);
+                  }
+                });
+              },
+              child: Container(
+                margin: EdgeInsets.only(right: 6),
+                child: Icon(
+                  inGroup ? Icons.check_box : Icons.check_box_outline_blank,
+                  size: 18,
+                  color: inGroup ? _colors.primary : _colors.textSecondary,
+                ),
+              ),
+            ),
+          // 颜色指示器
+          Container(
+            width: 12,
+            height: 12,
+            decoration: BoxDecoration(
+              color: isPortConnected ? portColor : Colors.transparent,
+              shape: BoxShape.circle,
+              border: Border.all(color: isPortConnected ? portColor : _colors.textSecondary),
+            ),
+          ),
+          SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              isPortConnected ? '[${portIndex}] $portName' : portName,
+              style: TextStyle(
+                color: isPortConnected ? portColor : _colors.textSecondary,
+                fontSize: 11,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          SizedBox(
+            width: 50,
+            child: TextButton(
+              onPressed: () {
+                if (isPortConnected) {
+                  _disconnectPort(portName);
+                } else {
+                  _connectPort(portName);
+                }
+              },
+              style: TextButton.styleFrom(
+                padding: EdgeInsets.zero,
+                foregroundColor: isPortConnected ? Colors.red : Colors.green,
+              ),
+              child: Text(isPortConnected ? '断开' : '连接', style: TextStyle(fontSize: 10)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMonitorToggle() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '监控模式',
+          style: TextStyle(color: _colors.primary, fontSize: 12, fontWeight: FontWeight.bold),
+        ),
+        SizedBox(height: 4),
+        SwitchListTile.adaptive(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: Text(
+            _monitorAllPorts ? '全部监控' : '单口监控',
+            style: TextStyle(color: _colors.text, fontSize: 12),
+          ),
+          subtitle: Text(
+            _monitorAllPorts ? '显示所有串口数据' : '仅显示选中串口数据',
+            style: TextStyle(color: _colors.textSecondary, fontSize: 10),
+          ),
+          value: _monitorAllPorts,
+          activeColor: _colors.primary,
+          onChanged: (value) => setState(() => _monitorAllPorts = value),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildConnectionTargetSelector() {
+    final modeLabels = {
+      ConnectionMode.all: '全部',
+      ConnectionMode.group: '分组',
+      ConnectionMode.single: '单个',
+    };
+    final modeValues = ['全部', '分组', '单个'];
+    String currentModeLabel = modeLabels[_connectionMode]!;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '连接目标',
+          style: TextStyle(color: _colors.primary, fontSize: 12, fontWeight: FontWeight.bold),
+        ),
+        SizedBox(height: 4),
+        Container(
+          height: 40,
+          decoration: BoxDecoration(
+            border: Border.all(color: _colors.primary, width: 1),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          padding: EdgeInsets.symmetric(horizontal: 8),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              value: currentModeLabel,
+              isExpanded: true,
+              dropdownColor: _colors.surface,
+              style: TextStyle(color: _colors.text, fontSize: 12),
+              icon: Icon(Icons.arrow_drop_down, color: _colors.primary),
+              items: modeValues.map((String v) {
+                return DropdownMenuItem<String>(
+                  value: v,
+                  child: Text(v),
+                );
+              }).toList(),
+              onChanged: (newValue) {
+                setState(() {
+                  if (newValue == '全部') _connectionMode = ConnectionMode.all;
+                  else if (newValue == '分组') _connectionMode = ConnectionMode.group;
+                  else if (newValue == '单个') _connectionMode = ConnectionMode.single;
+                });
+              },
+            ),
+          ),
+        ),
+        // 单个模式：显示串口选择
+        if (_connectionMode == ConnectionMode.single)
+          Padding(
+            padding: EdgeInsets.only(top: 8),
+            child: _buildConfigItem(
+              '选择串口',
+              _singleConnectPort,
+              availablePorts.isEmpty ? ['无可用串口'] : availablePorts,
+            ),
+          ),
+        // 分组模式提示
+        if (_connectionMode == ConnectionMode.group)
+          Padding(
+            padding: EdgeInsets.only(top: 4),
+            child: Text(
+              _groupPorts.isEmpty ? '勾选上方串口以选择' : '已选 ${_groupPorts.length} 个串口',
+              style: TextStyle(color: _colors.textSecondary, fontSize: 10),
+            ),
+          ),
+      ],
     );
   }
 
@@ -1994,16 +2388,13 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
               }).toList(),
               onChanged: (newValue) {
                 setState(() {
-                  if (label == '串口号') selectedPort = newValue!;
-                  if (label == '波特率') selectedBaudRate = newValue!;
-                  if (label == '数据位') selectedDataBits = newValue!;
-                  if (label == '停止位') selectedStopBits = newValue!;
-                  if (label == '校验码') selectedParity = newValue!;
+                  if (label == '波特率') globalBaudRate = newValue!;
+                  if (label == '数据位') globalDataBits = newValue!;
+                  if (label == '停止位') globalStopBits = newValue!;
+                  if (label == '校验码') globalParity = newValue!;
+                  if (label == '选择串口') _singleConnectPort = newValue!;
+                  if (label == '监视端口') _selectedMonitorPort = newValue!;
                 });
-                if (isConnected) {
-                  _addLine("配置变更，正在重启串口...", LineType.system);
-                  _handleDisconnect(); // 触发自动重连逻辑
-                }
               },
             ),
           ),
@@ -2102,6 +2493,73 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   }
 }
 
+// 串口端口颜色调色板 - 16种不同颜色
+const List<Color> portColors = [
+  Color(0xFF4EC9B0), // 端口0 - 青绿
+  Color(0xFFCE9178), // 端口1 - 橙色
+  Color(0xFF569CD6), // 端口2 - 蓝色
+  Color(0xFFDCDCAA), // 端口3 - 黄色
+  Color(0xFFC586C0), // 端口4 - 紫色
+  Color(0xFFD16969), // 端口5 - 红色
+  Color(0xFF9CDCFE), // 端口6 - 浅蓝
+  Color(0xFFD7BA7D), // 端口7 - 金色
+  Color(0xFF6A9955), // 端口8 - 绿色
+  Color(0xFFCC7832), // 端口9 - 深橙
+  Color(0xFFB5CEA8), // 端口10 - 浅绿
+  Color(0xFFBD93F9), // 端口11 - 薰衣草
+  Color(0xFF73C8A9), // 端口12 - 海绿
+  Color(0xFFF08A5D), // 端口13 - 珊瑚
+  Color(0xFFB83B5E), // 端口14 - 玫红
+  Color(0xFF6C5B7B), // 端口15 - 紫灰
+];
+
+// 端口连接上下文类
+class PortConnection {
+  final String portName;
+  final int index;
+  final Color color;
+  SerialPort? serialPort;
+  SerialPortReader? reader;
+  StreamSubscription<Uint8List>? subscription;
+  bool isConnected;
+  bool autoReconnect;
+  Timer? reconnectTimer;
+  StringBuffer dataBuffer;
+  Timer? dataTimeoutTimer;
+  String baudRate;
+  String dataBits;
+  String stopBits;
+  String parity;
+
+  PortConnection({
+    required this.portName,
+    required this.index,
+    required this.color,
+    this.baudRate = '9600',
+    this.dataBits = '8',
+    this.stopBits = '1',
+    this.parity = '无校验',
+    this.isConnected = false,
+    this.autoReconnect = false,
+  }) : dataBuffer = StringBuffer();
+
+  void dispose() {
+    subscription?.cancel();
+    subscription = null;
+    reader?.close();
+    reader = null;
+    serialPort?.close();
+    serialPort?.dispose();
+    serialPort = null;
+    reconnectTimer?.cancel();
+    reconnectTimer = null;
+    dataTimeoutTimer?.cancel();
+    dataTimeoutTimer = null;
+    dataBuffer.clear();
+    isConnected = false;
+  }
+}
+
 // 数据片段类型定义
 enum SegmentType { text, hex }
 
@@ -2116,33 +2574,39 @@ class DataSegment {
 // 数据行类型定义
 enum LineType { send, receive, system }
 
+// 连接模式定义
+enum ConnectionMode { all, group, single }
+
 // 增强的数据行类
 class EnhancedDataLine {
   final List<DataSegment> segments;
   final LineType lineType;
   final DateTime? timestamp;
+  final int? portIndex;
   
   EnhancedDataLine({
     required this.segments,
     required this.lineType,
     this.timestamp,
+    this.portIndex,
   });
   
   @override
   String toString() {
     String content = segments.map((segment) => segment.content).join();
+    String portStr = portIndex != null ? '[${portIndex}] ' : '';
     if (timestamp != null) {
       String timeStr = timestamp!.toString().substring(11, 19);
       switch (lineType) {
         case LineType.send:
-          return '$timeStr 发送: $content';
+          return '$timeStr ${portStr}发送: $content';
         case LineType.receive:
-          return '$timeStr 接收: $content';
+          return '$timeStr ${portStr}接收: $content';
         case LineType.system:
-          return '$timeStr $content';
+          return '$timeStr ${portStr}$content';
       }
     } else {
-      return content;
+      return '$portStr$content';
     }
   }
 }

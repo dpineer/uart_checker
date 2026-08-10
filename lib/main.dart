@@ -9,6 +9,7 @@ import 'app_theme.dart';
 import 'websocket_server.dart';
 import 'websocket_control_page.dart';
 import 'ssh_terminal_page.dart';
+import 'help_page.dart';
 
 void main() {
   // 在运行应用之前，确保插件系统已初始化
@@ -162,6 +163,11 @@ class _HomePageState extends State<HomePage> {
                 selectedIcon: Icon(Icons.terminal, color: colors.primary),
                 label: Text('SSH终端', style: TextStyle(color: colors.navigationRailColor(_selectedIndex, 2))),
               ),
+              NavigationRailDestination(
+                icon: Icon(Icons.help_outline, color: colors.navigationRailColor(_selectedIndex, 3)),
+                selectedIcon: Icon(Icons.help, color: colors.primary),
+                label: Text('说明', style: TextStyle(color: colors.navigationRailColor(_selectedIndex, 3))),
+              ),
             ],
           ),
           VerticalDivider(thickness: 1, width: 1),
@@ -174,6 +180,7 @@ class _HomePageState extends State<HomePage> {
                     SerialPortHomePage(),
                     WebSocketControlPage(),
                     SshTerminalPage(),
+                    HelpPage(),
                   ],
                 ),
                 Positioned(
@@ -231,6 +238,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
 
   // 可用串口列表
   List<String> availablePorts = [];
+  Timer? _portListTimer;
 
   // 数据接收相关变量
   final List<DataLine> _receivedLines = [];
@@ -275,10 +283,18 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
     _addLine("多串口监控就绪，点击\"连接所有\"或单独连接串口", LineType.system);
     _receiveScrollController.addListener(_scrollListener);
     _initWebSocketServer();
+    // 每2秒自动轮询串口列表，及时发现热插拔变化
+    _portListTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      final current = SerialPort.availablePorts;
+      if (!_listEquals(current, availablePorts)) {
+        _refreshPortList();
+      }
+    });
   }
 
   @override
   void dispose() {
+    _portListTimer?.cancel();
     for (var conn in _portConnections.values) {
       conn.autoReconnect = false;
       conn.dispose();
@@ -756,12 +772,36 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   }
 
   void _refreshPortList() {
-    setState(() {
-      availablePorts = SerialPort.availablePorts;
-      if (_singleConnectPort.isEmpty && availablePorts.isNotEmpty) {
-        _singleConnectPort = availablePorts.first;
-      }
-    });
+    try {
+      final newPorts = List<String>.from(SerialPort.availablePorts);
+      setState(() {
+        availablePorts = newPorts;
+        if (_singleConnectPort.isEmpty && availablePorts.isNotEmpty) {
+          _singleConnectPort = availablePorts.first;
+        }
+        // 清理已不存在且不再连接的端口上下文
+        _portConnections.removeWhere((name, conn) =>
+            !conn.isConnected && !availablePorts.contains(name));
+        // 如果当前选中的发送端口已无效，切换到第一个可用已连端口
+        if (selectedSendPort.isNotEmpty &&
+            !_portConnections.containsKey(selectedSendPort)) {
+          final connected = _portConnections.values
+              .where((p) => p.isConnected)
+              .toList();
+          selectedSendPort = connected.isNotEmpty ? connected.first.portName : '';
+        }
+      });
+    } catch (e) {
+      _addLine("刷新串口列表失败: $e", LineType.system);
+    }
+  }
+
+  bool _listEquals(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (int i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   void _connectPort(String portName, {bool manual = true}) {
@@ -909,7 +949,16 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
     if (conn == null || data.isEmpty) return;
 
     try {
-      String dataString = _tryMultipleDecodings(data);
+      String dataString;
+      if (hexMode) {
+        // HEX模式：直接将原始字节转为空格分隔的HEX字符串，跳过文本解码
+        // 末尾补一个空格，避免连续chunk写入buffer时丢失间隔
+        dataString = data
+            .map((byte) => byte.toRadixString(16).padLeft(2, '0').toUpperCase())
+            .join(' ') + ' ';
+      } else {
+        dataString = _tryMultipleDecodings(data);
+      }
       conn.dataBuffer.write(dataString);
 
       conn.dataTimeoutTimer?.cancel();
@@ -1031,16 +1080,18 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
     return false; // 其他字符视为不正常
   }
 
-  // 格式化HEX字符串：添加字符间空格
+  // 格式化HEX字符串：确保为空格分隔的字节对格式
   String _formatHexWithSpaces(String hexString) {
-    if (hexString.isEmpty) return hexString;
+    // 先移除已有空格，再统一按字节对插入空格
+    String cleaned = hexString.replaceAll(' ', '');
+    if (cleaned.isEmpty) return hexString;
     
     StringBuffer formatted = StringBuffer();
-    for (int i = 0; i < hexString.length; i += 2) {
+    for (int i = 0; i < cleaned.length; i += 2) {
       if (i > 0) formatted.write(' ');
       int end = i + 2;
-      if (end > hexString.length) end = hexString.length;
-      formatted.write(hexString.substring(i, end));
+      if (end > cleaned.length) end = cleaned.length;
+      formatted.write(cleaned.substring(i, end));
     }
     return formatted.toString();
   }
@@ -1049,10 +1100,9 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   List<DataSegment> _splitTextAndHex(String text) {
     List<DataSegment> segments = [];
     
-    // 只有在HEX模式下才进行HEX序列识别，文本模式下只处理明显的HEX格式数据
     if (hexMode) {
-      // 使用正则表达式查找长HEX序列（≥12个连续HEX字符）
-      RegExp hexPattern = RegExp(r'([0-9A-Fa-f]{12,})');
+      // HEX模式下：匹配空格分隔的HEX字节对（如 "48 65 6C"）或长连续HEX串（12+字符）
+      RegExp hexPattern = RegExp(r'(?:[0-9A-Fa-f]{2} )+[0-9A-Fa-f]{2}|[0-9A-Fa-f]{12,}');
       int lastIndex = 0;
       
       for (RegExpMatch match in hexPattern.allMatches(text)) {
@@ -1088,8 +1138,7 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
         }
       }
     } else {
-      // 文本模式下，只处理明确的HEX格式数据（如 [49 20 28 38 38 32 31 32] 这样的格式）
-      // 保持原始文本，不做特殊处理
+      // 文本模式下，保持原始文本，不做特殊处理
       segments.add(DataSegment(
         content: text,
         type: SegmentType.text,
@@ -1288,24 +1337,17 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   void _displayReceivedData(String dataString, {int? portIndex}) {
     if (dataString.isEmpty) return;
     
-    // 只有在HEX模式下才进行特殊处理，否则直接显示原始数据
-    if (hexMode) {
-      // 先处理不正常字符
-      String processedString = _processUnusualCharacters(dataString);
-      
-      // 尝试将HEX格式转换为可读文本
-      String convertedString = _convertHexToReadableText(processedString);
-      
-      // 使用智能分割算法处理混合数据
-      List<DataSegment> segments = _splitTextAndHex(convertedString);
-      _addEnhancedLine(segments, LineType.receive, portIndex: portIndex);
-      _sendToWebSocket(convertedString, portIndex: portIndex);
-    } else {
-      // 非HEX模式下，直接处理原始数据，保留中文字符
-      List<DataSegment> segments = _splitTextAndHex(dataString);
-      _addEnhancedLine(segments, LineType.receive, portIndex: portIndex);
-      _sendToWebSocket(dataString, portIndex: portIndex);
-    }
+    // 始终处理不正常字符，避免Flutter渲染为'.'，
+    // 也避免控制字符导致复制时截断
+    String processedString = _processUnusualCharacters(dataString);
+    
+    // 尝试将HEX格式转换为可读文本
+    String convertedString = _convertHexToReadableText(processedString);
+    
+    // 使用智能分割算法处理混合数据
+    List<DataSegment> segments = _splitTextAndHex(convertedString);
+    _addEnhancedLine(segments, LineType.receive, portIndex: portIndex);
+    _sendToWebSocket(convertedString, portIndex: portIndex);
   }
 
   void _sendData() {
@@ -2073,9 +2115,11 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
             SizedBox(height: 12),
 
             // 全局配置
-            _buildConfigItem('波特率', globalBaudRate, [
-              '4800', '9600', '19200', '38400', '57600', '115200',
-            ]),
+            _buildConfigItem(
+              '波特率',
+              _baudValueToLabel[globalBaudRate] ?? globalBaudRate,
+              _baudRateOptions,
+            ),
             SizedBox(height: 12),
             _buildConfigItem('数据位', globalDataBits, ['5', '6', '7', '8']),
             SizedBox(height: 12),
@@ -2354,6 +2398,8 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   }
 
   Widget _buildConfigItem(String label, String value, List<String> options) {
+    // 若当前值不在选项中（如通过 WebSocket 设置了自定义值），将其加入列表，避免 DropdownButton 断言失败
+    final List<String> items = options.contains(value) ? options : [value, ...options];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2380,15 +2426,17 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
               dropdownColor: _colors.surface,
               style: TextStyle(color: _colors.text, fontSize: 12),
               icon: Icon(Icons.arrow_drop_down, color: _colors.primary),
-              items: options.map((String value) {
+              items: items.map((String item) {
                 return DropdownMenuItem<String>(
-                  value: value,
-                  child: Text(value),
+                  value: item,
+                  child: Text(item),
                 );
               }).toList(),
               onChanged: (newValue) {
                 setState(() {
-                  if (label == '波特率') globalBaudRate = newValue!;
+                  if (label == '波特率') {
+                    globalBaudRate = _baudLabelToValue[newValue!] ?? newValue!;
+                  }
                   if (label == '数据位') globalDataBits = newValue!;
                   if (label == '停止位') globalStopBits = newValue!;
                   if (label == '校验码') globalParity = newValue!;
@@ -2493,6 +2541,32 @@ class _SerialPortHomePageState extends State<SerialPortHomePage> {
   }
 }
 
+// 波特率下拉选项（显示标签），高位档位用 M 缩写
+const List<String> _baudRateOptions = [
+  '300', '600', '1200', '2400', '4800', '9600',
+  '19200', '38400', '57600', '115200',
+  '230400', '460800', '500000', '576000', '921600',
+  '1M', '1152000', '1.5M', '2M', '3M', '4M',
+];
+
+// 波特率 显示标签 -> 实际数值
+const Map<String, String> _baudLabelToValue = {
+  '1M': '1000000',
+  '1.5M': '1500000',
+  '2M': '2000000',
+  '3M': '3000000',
+  '4M': '4000000',
+};
+
+// 波特率 实际数值 -> 显示标签
+const Map<String, String> _baudValueToLabel = {
+  '1000000': '1M',
+  '1500000': '1.5M',
+  '2000000': '2M',
+  '3000000': '3M',
+  '4000000': '4M',
+};
+
 // 串口端口颜色调色板 - 16种不同颜色
 const List<Color> portColors = [
   Color(0xFF4EC9B0), // 端口0 - 青绿
@@ -2594,6 +2668,8 @@ class EnhancedDataLine {
   @override
   String toString() {
     String content = segments.map((segment) => segment.content).join();
+    // 复制时消毒：将残余的不可渲染字符替换为 [HEX] 表示
+    content = _sanitizeTextForCopy(content);
     String portStr = portIndex != null ? '[${portIndex}] ' : '';
     if (timestamp != null) {
       String timeStr = timestamp!.toString().substring(11, 19);
@@ -2611,6 +2687,30 @@ class EnhancedDataLine {
   }
 }
 
+// 复制文本消毒：将无法渲染的控制字符替换为 [HEX] 格式
+String _sanitizeTextForCopy(String text) {
+  StringBuffer result = StringBuffer();
+  for (int i = 0; i < text.length; i++) {
+    int code = text.codeUnitAt(i);
+    // 保留可打印/常见字符（含 CJK）
+    if ((code >= 32 && code <= 126) ||
+        code == 10 || code == 13 || code == 9 ||
+        (code >= 0x4E00 && code <= 0x9FFF) ||
+        (code >= 0x3400 && code <= 0x4DBF) ||
+        (code >= 0x20000 && code <= 0x2A6DF) ||
+        (code >= 0x2A700 && code <= 0x2B73F) ||
+        (code >= 0x2B740 && code <= 0x2B81F) ||
+        (code >= 0x2B820 && code <= 0x2CEAF) ||
+        (code >= 0xF900 && code <= 0xFAFF) ||
+        (code >= 0x2F800 && code <= 0x2FA1F)) {
+      result.write(text[i]);
+    } else {
+      result.write('[${code.toRadixString(16).padLeft(2, '0').toUpperCase()}]');
+    }
+  }
+  return result.toString();
+}
+
 // 旧数据行类（保持向后兼容）
 class DataLine {
   final String text;
@@ -2621,18 +2721,19 @@ class DataLine {
 
   @override
   String toString() {
+    String sanitized = _sanitizeTextForCopy(text);
     if (timestamp != null) {
       String timeStr = timestamp!.toString().substring(11, 19);
       switch (type) {
         case LineType.send:
-          return '$timeStr 发送: $text';
+          return '$timeStr 发送: $sanitized';
         case LineType.receive:
-          return '$timeStr 接收: $text';
+          return '$timeStr 接收: $sanitized';
         case LineType.system:
-          return '$timeStr $text';
+          return '$timeStr $sanitized';
       }
     } else {
-      return text;
+      return sanitized;
     }
   }
 }
